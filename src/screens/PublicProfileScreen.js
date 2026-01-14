@@ -11,15 +11,18 @@ import {
   StatusBar,
   Dimensions,
   Platform,
+  PermissionsAndroid,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import { launchImageLibrary } from 'react-native-image-picker';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getPublicProfile,
   getPublicRolls,
   getPublicPhotos,
   uploadProfileImage,
+  uploadPublicProfilePhoto,
   followUser,
   unfollowUser,
   isFollowing,
@@ -34,12 +37,14 @@ const PublicProfileScreen = ({ route, navigation }) => {
   const { user: currentUser } = useAuth();
   const userId = route?.params?.userId || currentUser?.id;
   const isOwnProfile = userId === currentUser?.id;
+  // Removed roll-related functions - public profile photos don't use rolls
 
   const [profile, setProfile] = useState(null);
   const [publicRolls, setPublicRolls] = useState([]);
   const [publicPhotos, setPublicPhotos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [following, setFollowing] = useState(false);
   const [viewMode, setViewMode] = useState('photos'); // 'photos' or 'rolls'
 
@@ -126,6 +131,101 @@ const PublicProfileScreen = ({ route, navigation }) => {
       setUploadingImage(false);
     }
     */
+  };
+
+  // Request storage permission for Android
+  const requestStoragePermission = async () => {
+    if (Platform.OS !== 'android') return true;
+    
+    try {
+      if (Platform.Version >= 33) {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES
+        );
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      } else {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE
+        );
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      }
+    } catch (err) {
+      console.warn('Permission request error:', err);
+      return false;
+    }
+  };
+
+  // Handle photo upload to photos tab (standalone public photos, NOT attached to any roll)
+  const handlePhotoUpload = async () => {
+    if (!isOwnProfile) return;
+
+    // Request permissions for Android
+    if (Platform.OS === 'android') {
+      const hasPermission = await requestStoragePermission();
+      if (!hasPermission) {
+        Alert.alert(
+          'Permission Required',
+          'Photo access permission is required to select images from your Photos app.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+    }
+
+    const options = {
+      mediaType: 'photo',
+      quality: 0.8,
+      maxWidth: 2048,
+      maxHeight: 2048,
+      selectionLimit: 1,
+      includeBase64: true, // Get base64 data to avoid content:// URI issues on Android
+    };
+
+    setUploadingPhoto(true);
+    try {
+      launchImageLibrary(options, async (response) => {
+        if (response.didCancel) {
+          setUploadingPhoto(false);
+          return;
+        }
+
+        if (response.errorCode) {
+          Alert.alert('Error', response.errorMessage || 'Failed to pick image');
+          setUploadingPhoto(false);
+          return;
+        }
+
+        if (response.assets && response.assets[0]) {
+          const selectedImage = response.assets[0];
+
+          try {
+            // Upload directly to public_profile_photos table (NOT to a roll)
+            await uploadPublicProfilePhoto(
+              userId,
+              selectedImage.uri,
+              selectedImage.base64,
+              null // No caption for now
+            );
+
+            // Refresh photos list
+            await loadProfileData();
+
+            Alert.alert('Success! ✅', 'Photo added to your profile');
+          } catch (error) {
+            console.error('Error uploading photo:', error);
+            Alert.alert('Error', error.message || 'Failed to upload photo');
+          } finally {
+            setUploadingPhoto(false);
+          }
+        } else {
+          setUploadingPhoto(false);
+        }
+      });
+    } catch (error) {
+      console.error('Error opening image picker:', error);
+      Alert.alert('Error', 'Failed to open image picker');
+      setUploadingPhoto(false);
+    }
   };
 
   const handleFollow = async () => {
@@ -218,27 +318,35 @@ const PublicProfileScreen = ({ route, navigation }) => {
     }
 
     return (
-      <View style={styles.rollsContainer}>
+      <View style={styles.rollsGrid}>
         {publicRolls.map((roll) => (
           <TouchableOpacity
             key={roll.id}
-            style={styles.rollCard}
+            style={styles.rollGridItem}
             onPress={() => {
-              // TODO: Navigate to roll detail
-              Alert.alert('Roll', roll.title);
+              navigation?.navigate('RollDetail', { 
+                rollId: roll.id,
+                initialRoll: roll
+              });
             }}
+            activeOpacity={0.8}
           >
-            <View style={styles.rollIconContainer}>
-              <Ionicons name="camera" size={32} color={colors.primary} />
-            </View>
-            <Text style={styles.rollTitle} numberOfLines={2}>
-              {roll.title}
-            </Text>
-            {roll.description && (
-              <Text style={styles.rollDescription} numberOfLines={2}>
-                {roll.description}
-              </Text>
+            {roll.title_image_url ? (
+              <Image 
+                source={{ uri: roll.title_image_url }} 
+                style={styles.rollGridImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.rollGridPlaceholder}>
+                <Ionicons name="camera-outline" size={32} color={colors.textSecondary} />
+              </View>
             )}
+            <View style={styles.rollGridOverlay}>
+              <Text style={styles.rollGridTitle} numberOfLines={1}>
+                {roll.title}
+              </Text>
+            </View>
           </TouchableOpacity>
         ))}
       </View>
@@ -289,7 +397,20 @@ const PublicProfileScreen = ({ route, navigation }) => {
           {isOwnProfile ? 'My Profile' : profile.username || 'Profile'}
         </Text>
         <View style={styles.headerRight}>
-          {isOwnProfile && (
+          {isOwnProfile && viewMode === 'photos' && (
+            <TouchableOpacity 
+              onPress={handlePhotoUpload}
+              disabled={uploadingPhoto}
+              style={styles.uploadButton}
+            >
+              {uploadingPhoto ? (
+                <ActivityIndicator size="small" color={colors.textWhite} />
+              ) : (
+                <Ionicons name="add-circle-outline" size={24} color={colors.textWhite} />
+              )}
+            </TouchableOpacity>
+          )}
+          {isOwnProfile && viewMode !== 'photos' && (
             <TouchableOpacity onPress={() => console.log('Settings')}>
               <Ionicons name="settings-outline" size={24} color={colors.textWhite} />
             </TouchableOpacity>
@@ -445,6 +566,10 @@ const styles = StyleSheet.create({
   },
   headerRight: {
     width: 32,
+    alignItems: 'flex-end',
+  },
+  uploadButton: {
+    padding: 4,
   },
   scrollView: {
     flex: 1,
@@ -644,38 +769,42 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.textSecondary,
   },
-  rollsContainer: {
-    padding: 16,
+  rollsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 2,
   },
-  rollCard: {
-    backgroundColor: colors.background,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.inputBorder,
+  rollGridItem: {
+    width: GRID_SIZE,
+    height: GRID_SIZE,
+    margin: 1,
+    position: 'relative',
+    borderRadius: 2,
+    overflow: 'hidden',
   },
-  rollIconContainer: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+  rollGridImage: {
+    width: '100%',
+    height: '100%',
+  },
+  rollGridPlaceholder: {
+    width: '100%',
+    height: '100%',
     backgroundColor: colors.inputBackground,
-    justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12,
+    justifyContent: 'center',
   },
-  rollTitle: {
-    fontSize: 16,
+  rollGridOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    padding: 8,
+  },
+  rollGridTitle: {
+    fontSize: 12,
     fontWeight: '600',
-    color: colors.textPrimary,
-    textAlign: 'center',
-    marginBottom: 4,
-  },
-  rollDescription: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    textAlign: 'center',
+    color: colors.textWhite,
   },
 });
 

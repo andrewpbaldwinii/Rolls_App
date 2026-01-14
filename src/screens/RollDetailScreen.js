@@ -10,10 +10,19 @@ import {
   Image,
   Dimensions,
   ScrollView,
+  Alert,
+  Platform,
+  Switch,
+  PermissionsAndroid,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { launchImageLibrary } from 'react-native-image-picker';
+import { useAuth } from '../contexts/AuthContext';
+import { useRolls } from '../contexts/RollsContext';
+import { setRollPublic } from '../services/publicProfile';
+import { uploadRollTitleImage } from '../services/storage';
 import { supabase } from '../lib/supabase';
 import colors from '../constants/colors';
 
@@ -30,12 +39,20 @@ const RollDetailScreen = () => {
   const route = useRoute();
   const insets = useSafeAreaInsets();
   const { rollId, initialRoll } = route.params || {};
+  const { user } = useAuth();
+  const { updateRoll, fetchRolls } = useRolls();
 
   const [roll, setRoll] = useState(initialRoll || null);
   const [images, setImages] = useState([]);
   const [contributorsCount, setContributorsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [uploadingTitleImage, setUploadingTitleImage] = useState(false);
+  const [updatingPublic, setUpdatingPublic] = useState(false);
+
+  const isOwner = useMemo(() => {
+    return roll && user && roll.creator_id === user.id;
+  }, [roll, user]);
 
   const isLocked = useMemo(() => {
     if (!roll?.release_date) return false;
@@ -66,11 +83,13 @@ const RollDetailScreen = () => {
           setRoll(data);
         }
 
-        // Fetch images
+        // Fetch roll images (exclude title images - they're separate and stored in rolls.title_image_url)
+        // Title images are public and always visible, roll images are locked until release date
         const { data: imageData, error: imageError } = await supabase
           .from('roll_images')
           .select('*')
           .eq('roll_id', rollId)
+          .neq('caption', '__title_image__') // Exclude any title images that might exist
           .order('created_at', { ascending: false });
         if (imageError) throw imageError;
         setImages(imageData || []);
@@ -92,6 +111,128 @@ const RollDetailScreen = () => {
 
     fetchData();
   }, [rollId, roll]);
+
+  const handleTitleImagePicker = async () => {
+    if (!isOwner) return;
+
+    // Request permissions on Android
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
+          {
+            title: 'Photo Access',
+            message: 'Rolls needs access to your photos to set a title image.',
+            buttonNeutral: 'Ask Me Later',
+            buttonNegative: 'Cancel',
+            buttonPositive: 'OK',
+          }
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          Alert.alert('Permission Denied', 'Photo access is required to set a title image.');
+          return;
+        }
+      } catch (err) {
+        console.warn('Permission error:', err);
+      }
+    }
+
+    const options = {
+      mediaType: 'photo',
+      quality: 0.8,
+      includeBase64: true,
+    };
+
+    launchImageLibrary(options, async (response) => {
+      if (response.didCancel || response.errorCode) {
+        return;
+      }
+
+      if (response.assets && response.assets[0]) {
+        const asset = response.assets[0];
+        if (asset.base64) {
+          setUploadingTitleImage(true);
+          try {
+            const titleImageUrl = await uploadRollTitleImage(rollId, asset.uri, asset.base64);
+            
+            // Update roll with title image URL
+            // Title images are public and separate from roll images (which are locked until release date)
+            try {
+              await updateRoll(rollId, { title_image_url: titleImageUrl });
+            } catch (updateError) {
+              // If update fails (e.g., column doesn't exist), try direct update
+              console.warn('updateRoll failed, trying direct update:', updateError);
+              const { error: directError } = await supabase
+                .from('rolls')
+                .update({ title_image_url: titleImageUrl })
+                .eq('id', rollId);
+              if (directError) throw directError;
+            }
+            
+            // Title images are NOT stored in roll_images - they're separate and always public
+            // No need to call upsertTitleImageAsRollImage
+            
+            // Force refresh roll data by fetching fresh from DB
+            // Add a small delay to ensure DB commit is complete
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            const { data: updatedRoll, error: fetchError } = await supabase
+              .from('rolls')
+              .select('*')
+              .eq('id', rollId)
+              .single();
+            
+            if (fetchError) {
+              console.error('Error fetching updated roll:', fetchError);
+            } else if (updatedRoll) {
+              console.log('✅ Fetched updated roll:', {
+                id: updatedRoll.id,
+                title_image_url: updatedRoll.title_image_url,
+                hasUrl: !!updatedRoll.title_image_url
+              });
+              setRoll(updatedRoll);
+              
+              // Force a re-render by updating a dummy state if needed
+              if (!updatedRoll.title_image_url) {
+                console.warn('⚠️ Warning: title_image_url is null/undefined after update');
+              }
+            } else {
+              console.warn('⚠️ No roll data returned from fetch');
+            }
+            
+            Alert.alert('Success', 'Title image updated!');
+          } catch (uploadError) {
+            console.error('Error uploading title image:', uploadError);
+            Alert.alert('Error', uploadError.message || 'Failed to upload title image. Please try again.');
+          } finally {
+            setUploadingTitleImage(false);
+          }
+        }
+      }
+    });
+  };
+
+  const handleTogglePublic = async (value) => {
+    if (!isOwner) return;
+    
+    setUpdatingPublic(true);
+    try {
+      await setRollPublic(rollId, value);
+      // Refresh roll data
+      const { data: updatedRoll } = await supabase
+        .from('rolls')
+        .select('*')
+        .eq('id', rollId)
+        .single();
+      if (updatedRoll) setRoll(updatedRoll);
+      await fetchRolls(); // Refresh rolls list
+    } catch (error) {
+      console.error('Error toggling roll public status:', error);
+      Alert.alert('Error', 'Failed to update roll visibility');
+    } finally {
+      setUpdatingPublic(false);
+    }
+  };
 
   const renderImageItem = ({ item, index }) => {
     const isLastInRow = (index + 1) % GRID_COLUMNS === 0;
@@ -175,6 +316,52 @@ const RollDetailScreen = () => {
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
       <Header />
       <ScrollView contentContainerStyle={styles.content}>
+        {/* Title Image */}
+        {roll?.title_image_url ? (
+          <View style={styles.titleImageContainer}>
+            <Image 
+              source={{ uri: roll.title_image_url }} 
+              style={styles.titleImage}
+              resizeMode="cover"
+              onError={(error) => {
+                console.error('Title image load error:', error.nativeEvent.error);
+                console.log('Attempted URL:', roll.title_image_url);
+              }}
+              onLoad={() => {
+                console.log('✅ Title image loaded successfully:', roll.title_image_url);
+              }}
+            />
+            {isOwner && (
+              <TouchableOpacity
+                style={styles.editTitleImageButton}
+                onPress={handleTitleImagePicker}
+                disabled={uploadingTitleImage}
+              >
+                {uploadingTitleImage ? (
+                  <ActivityIndicator size="small" color={colors.background} />
+                ) : (
+                  <Ionicons name="camera" size={20} color={colors.background} />
+                )}
+              </TouchableOpacity>
+            )}
+          </View>
+        ) : isOwner ? (
+          <TouchableOpacity
+            style={styles.addTitleImageButton}
+            onPress={handleTitleImagePicker}
+            disabled={uploadingTitleImage}
+          >
+            {uploadingTitleImage ? (
+              <ActivityIndicator size="small" color={colors.textSecondary} />
+            ) : (
+              <>
+                <Ionicons name="image-outline" size={32} color={colors.textSecondary} />
+                <Text style={styles.addTitleImageText}>Add Title Image</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        ) : null}
+
         <View style={styles.card}>
           <View style={styles.titleRow}>
             <Text style={styles.title} numberOfLines={2} ellipsizeMode="tail">
@@ -230,6 +417,36 @@ const RollDetailScreen = () => {
               <Text style={styles.dateValue}>{releaseDate}</Text>
             </View>
           </View>
+
+          {/* Public/Private Toggle (Owner Only) */}
+          {isOwner && (
+            <View style={styles.publicToggleContainer}>
+              <View style={styles.publicToggleRow}>
+                <View style={styles.publicToggleLabelContainer}>
+                  <Ionicons 
+                    name={roll.is_public ? 'globe' : 'lock-closed'} 
+                    size={20} 
+                    color={roll.is_public ? colors.primary : colors.textSecondary} 
+                  />
+                  <Text style={styles.publicToggleLabel}>
+                    {roll.is_public ? 'Public' : 'Private'}
+                  </Text>
+                </View>
+                <Switch
+                  value={roll.is_public || false}
+                  onValueChange={handleTogglePublic}
+                  disabled={updatingPublic}
+                  trackColor={{ false: colors.inputBorder, true: colors.primary + '80' }}
+                  thumbColor={roll.is_public ? colors.primary : colors.textSecondary}
+                />
+              </View>
+              <Text style={styles.publicToggleHelper}>
+                {roll.is_public 
+                  ? 'This roll will appear on your public profile after the release date'
+                  : 'This roll is private and only visible to contributors'}
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.galleryHeader}>
@@ -342,6 +559,69 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.primary,
     fontWeight: '600',
+  },
+  titleImageContainer: {
+    width: '100%',
+    height: 200,
+    marginBottom: 16,
+    position: 'relative',
+  },
+  titleImage: {
+    width: '100%',
+    height: '100%',
+  },
+  editTitleImageButton: {
+    position: 'absolute',
+    bottom: 12,
+    right: 12,
+    backgroundColor: colors.primary + 'CC',
+    padding: 10,
+    borderRadius: 20,
+  },
+  addTitleImageButton: {
+    width: '100%',
+    height: 150,
+    backgroundColor: colors.inputBackground,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  addTitleImageText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  publicToggleContainer: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: colors.inputBorder,
+  },
+  publicToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  publicToggleLabelContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  publicToggleLabel: {
+    fontSize: 16,
+    color: colors.textPrimary,
+    marginLeft: 8,
+    fontWeight: '500',
+  },
+  publicToggleHelper: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginTop: 4,
   },
   description: {
     fontSize: 14,

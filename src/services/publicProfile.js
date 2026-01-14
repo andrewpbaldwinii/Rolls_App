@@ -66,10 +66,12 @@ export const getPublicProfile = async (userId) => {
         }
 
         // Count photos taken by this user (all photos, not just public)
+        // Exclude title images - they're separate and stored in rolls.title_image_url
         const { count: photosCount, error: photosError } = await supabase
           .from('roll_images')
           .select('*', { count: 'exact', head: true })
-          .eq('contributor_id', userId);
+          .eq('contributor_id', userId)
+          .neq('caption', '__title_image__');
         
         if (!photosError && photosCount !== null) {
           stats.photos_taken = photosCount;
@@ -99,10 +101,12 @@ export const getPublicProfile = async (userId) => {
           .eq('creator_id', userId);
         if (rollsCount !== null) stats.rolls_created = rollsCount;
 
+        // Exclude title images - they're separate and stored in rolls.title_image_url
         const { count: photosCount } = await supabase
           .from('roll_images')
           .select('*', { count: 'exact', head: true })
-          .eq('contributor_id', userId);
+          .eq('contributor_id', userId)
+          .neq('caption', '__title_image__');
         if (photosCount !== null) stats.photos_taken = photosCount;
       } catch (fallbackError) {
         console.log('Fallback stats calculation failed:', fallbackError.message);
@@ -122,20 +126,36 @@ export const getPublicProfile = async (userId) => {
 
 /**
  * Get public rolls for a user
+ * 
+ * Note: Public rolls appear on the profile immediately when toggled as public.
+ * The release_date only controls whether photos inside the roll are locked,
+ * not whether the roll itself appears on the public profile.
+ * 
+ * Excludes "Profile Photos" rolls - these are system rolls that shouldn't appear in the Rolls tab.
+ * 
  * @param {string} userId - User ID
- * @returns {Promise<Array>} Array of public rolls
+ * @returns {Promise<Array>} Array of public rolls (excluding Profile Photos)
  */
 export const getPublicRolls = async (userId) => {
   try {
+    // Get all public rolls (regardless of release_date)
+    // release_date only affects photo visibility, not roll visibility on profile
+    // Exclude "Profile Photos" rolls - these are system rolls for standalone photos
     const { data, error } = await supabase
       .from('rolls')
-      .select('id, title, description, created_at, is_public')
+      .select('id, title, description, created_at, is_public, title_image_url, release_date')
       .eq('creator_id', userId)
       .eq('is_public', true)
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    return data || [];
+    
+    // Filter out "Profile Photos" rolls (case-insensitive)
+    const filteredRolls = (data || []).filter(
+      roll => roll.title?.toLowerCase() !== 'profile photos'
+    );
+    
+    return filteredRolls;
   } catch (error) {
     console.error('Error fetching public rolls:', error);
     throw error;
@@ -144,20 +164,122 @@ export const getPublicRolls = async (userId) => {
 
 /**
  * Get public photos for a user
+ * Includes both:
+ * 1. Standalone public profile photos (from public_profile_photos table)
+ * 2. Photos from public rolls where the roll's release_date has passed
  * @param {string} userId - User ID
  * @returns {Promise<Array>} Array of public photos
  */
 export const getPublicPhotos = async (userId) => {
   try {
-    const { data, error } = await supabase
+    const now = new Date().toISOString();
+    
+    // Get standalone public profile photos (not attached to any roll)
+    // Handle gracefully if table doesn't exist yet
+    let profilePhotos = [];
+    let profilePhotosError = null;
+    try {
+      const { data, error } = await supabase
+        .from('public_profile_photos')
+        .select('id, image_url, caption, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+      profilePhotos = data || [];
+      profilePhotosError = error;
+    } catch (err) {
+      // Table doesn't exist yet - this is OK, user needs to run the migration
+      if (err.code === 'PGRST205' || err.message?.includes('not found')) {
+        console.log('public_profile_photos table not found - run CREATE_PUBLIC_PROFILE_PHOTOS_TABLE.sql');
+        profilePhotos = [];
+        profilePhotosError = null; // Don't treat this as an error
+      } else {
+        profilePhotosError = err;
+      }
+    }
+
+    // Get photos from public rolls where release_date has passed (or is null)
+    // Exclude title images - they're separate and stored in rolls.title_image_url
+    // Photos are public if the roll is public AND the release_date has passed
+    const { data: rollPhotos, error: rollPhotosError } = await supabase
       .from('roll_images')
-      .select('id, image_url, caption, created_at, roll_id, rolls(title)')
+      .select('id, image_url, caption, created_at, roll_id, rolls(title, is_public, release_date)')
       .eq('contributor_id', userId)
-      .eq('is_public', true)
+      .neq('caption', '__title_image__')
       .order('created_at', { ascending: false });
 
-    if (error) throw error;
-    return data || [];
+    // Handle errors gracefully
+    if (profilePhotosError) {
+      console.warn('Error fetching public profile photos:', profilePhotosError);
+    }
+    
+    if (rollPhotosError) {
+      // If the join fails, try a simpler query
+      console.warn('Error fetching public photos with roll join:', rollPhotosError);
+      const { data: simpleData, error: simpleError } = await supabase
+        .from('roll_images')
+        .select('id, image_url, caption, created_at, roll_id')
+        .eq('contributor_id', userId)
+        .neq('caption', '__title_image__')
+        .order('created_at', { ascending: false });
+      
+      if (simpleError) {
+        console.error('Error fetching roll photos:', simpleError);
+        // Return only profile photos if roll photos fail
+        return profilePhotos || [];
+      }
+      
+      // Filter client-side: get roll info and check if public
+      const filteredPhotos = [];
+      for (const photo of simpleData || []) {
+        const { data: rollData } = await supabase
+          .from('rolls')
+          .select('is_public, release_date')
+          .eq('id', photo.roll_id)
+          .single();
+        
+        if (rollData?.is_public) {
+          // Check if release_date has passed or is null
+          if (!rollData.release_date || new Date(rollData.release_date) <= new Date(now)) {
+            filteredPhotos.push(photo);
+          }
+        }
+      }
+      
+      // Combine profile photos and filtered roll photos
+      const allPhotos = [
+        ...(profilePhotos || []),
+        ...filteredPhotos
+      ];
+      
+      // Sort by created_at descending
+      return allPhotos.sort((a, b) => {
+        const dateA = new Date(a.created_at);
+        const dateB = new Date(b.created_at);
+        return dateB - dateA;
+      });
+    }
+
+    // Filter photos where roll is public and release_date has passed
+    const publicRollPhotos = (rollPhotos || []).filter(photo => {
+      const roll = photo.rolls;
+      if (!roll || !roll.is_public) return false;
+      // Photos are visible if release_date is null or in the past
+      if (!roll.release_date) return true;
+      return new Date(roll.release_date) <= new Date(now);
+    });
+
+    // Combine profile photos and public roll photos
+    const allPhotos = [
+      ...(profilePhotos || []),
+      ...publicRollPhotos
+    ];
+
+    // Sort by created_at descending
+    return allPhotos.sort((a, b) => {
+      const dateA = new Date(a.created_at);
+      const dateB = new Date(b.created_at);
+      return dateB - dateA;
+    });
   } catch (error) {
     console.error('Error fetching public photos:', error);
     throw error;
@@ -172,10 +294,12 @@ export const getPublicPhotos = async (userId) => {
 export const getUserPhotos = async (userId) => {
   try {
     // First try with the join to get roll info
+    // Exclude title images - they're separate and stored in rolls.title_image_url
     let query = supabase
       .from('roll_images')
       .select('id, image_url, caption, created_at, roll_id, rolls(title, is_public)')
       .eq('contributor_id', userId)
+      .neq('caption', '__title_image__')
       .order('created_at', { ascending: false })
       .limit(50);
 
@@ -184,10 +308,12 @@ export const getUserPhotos = async (userId) => {
     // If the join fails (maybe is_public column doesn't exist), try without it
     if (error && (error.message?.includes('is_public') || error.code === 'PGRST116')) {
       console.log('Retrying without is_public column...');
+      // Exclude title images - they're separate and stored in rolls.title_image_url
       const { data: simpleData, error: simpleError } = await supabase
         .from('roll_images')
         .select('id, image_url, caption, created_at, roll_id, rolls(title)')
         .eq('contributor_id', userId)
+        .neq('caption', '__title_image__')
         .order('created_at', { ascending: false })
         .limit(50);
 
@@ -393,7 +519,18 @@ export const setRollPublic = async (rollId, isPublic) => {
       .update({ is_public: isPublic })
       .eq('id', rollId);
 
-    if (error) throw error;
+    if (error) {
+      if (
+        error.message?.includes('is_public') ||
+        error.message?.toLowerCase()?.includes('schema cache')
+      ) {
+        throw new Error(
+          'Database is missing the `rolls.is_public` column.\n\n' +
+            'Run `PUBLIC_PROFILE_SETUP.sql` (or `ROLLS_PUBLIC_AND_TITLE_IMAGE_MIGRATION.sql`) in Supabase, then try again.'
+        );
+      }
+      throw error;
+    }
   } catch (error) {
     console.error('Error setting roll public:', error);
     throw error;
@@ -402,22 +539,20 @@ export const setRollPublic = async (rollId, isPublic) => {
 
 /**
  * Make a photo public
+ * NOTE: This function is deprecated - photos are now public based on their roll's is_public and release_date
+ * Standalone public photos are stored in public_profile_photos table and are always public
  * @param {string} imageId - Image ID
  * @param {boolean} isPublic - Whether to make it public
  * @returns {Promise<void>}
+ * @deprecated This function is no longer used - photos visibility is controlled by roll settings
  */
 export const setPhotoPublic = async (imageId, isPublic) => {
-  try {
-    const { error } = await supabase
-      .from('roll_images')
-      .update({ is_public: isPublic })
-      .eq('id', imageId);
-
-    if (error) throw error;
-  } catch (error) {
-    console.error('Error setting photo public:', error);
-    throw error;
-  }
+  console.warn('setPhotoPublic is deprecated - photo visibility is now controlled by roll settings');
+  // This function is kept for backwards compatibility but does nothing
+  // Photo visibility is now determined by:
+  // 1. For roll images: the roll's is_public flag and release_date
+  // 2. For standalone photos: they're always public (stored in public_profile_photos)
+  return;
 };
 
 /**
@@ -486,6 +621,136 @@ export const isFollowing = async (userId) => {
   } catch (error) {
     console.error('Error checking follow status:', error);
     return false;
+  }
+};
+
+/**
+ * Upload a standalone public profile photo (not attached to any roll)
+ * @param {string} userId - User ID
+ * @param {string} imagePath - Local file path or URI
+ * @param {string} base64Data - Optional base64 data (preferred for Android content:// URIs)
+ * @param {string} caption - Optional caption
+ * @returns {Promise<string>} Public URL of uploaded image
+ */
+export const uploadPublicProfilePhoto = async (userId, imagePath, base64Data = null, caption = null) => {
+  try {
+    // Validate userId
+    if (!userId) {
+      throw new Error('User ID is required to upload a public profile photo');
+    }
+
+    // Import uploadRollImage to reuse the upload logic
+    // We'll upload to a special "public-photos" folder in roll-images bucket
+    // Or we could use a separate bucket, but for now use roll-images with a special path
+    const { uploadRollImage } = await import('./storage');
+    
+    // Create a unique filename
+    const timestamp = Date.now();
+    const fileName = `public_photo_${timestamp}.jpg`;
+    // Use a special path format: public-photos/{userId}/filename.jpg
+    // This keeps it separate from roll photos
+    const specialRollId = `public-photos/${userId}`;
+    
+    // Upload image using the storage service
+    // We'll need to modify the path handling, but for now let's create a simpler approach
+    // Actually, let's upload directly to storage and then insert into the table
+    
+    let uint8Array;
+
+    // If base64 data is provided, use it directly
+    if (base64Data && base64Data.length > 0) {
+      console.log('✅ Using base64 data for public profile photo upload');
+      try {
+        let base64String = base64Data;
+        if (base64Data.includes(',')) {
+          base64String = base64Data.split(',')[1];
+        }
+        
+        const binaryString = atob(base64String);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        uint8Array = bytes;
+      } catch (base64Error) {
+        console.error('❌ Error converting base64:', base64Error);
+        throw new Error('Failed to process image data. Please try selecting the image again.');
+      }
+    } else {
+      // Fallback to reading from file URI
+      let fileUri = imagePath;
+      if (!imagePath.startsWith('file://') && !imagePath.startsWith('content://')) {
+        fileUri = `file://${imagePath}`;
+      }
+
+      const response = await fetch(fileUri);
+      if (!response.ok) {
+        throw new Error(`Failed to read file: ${response.status} ${response.statusText}`);
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      uint8Array = new Uint8Array(arrayBuffer);
+    }
+
+    // Upload to Supabase Storage - use dedicated profile-photos bucket
+    // Path format: {userId}/filename.jpg (simpler, no prefix needed)
+    const storagePath = `${userId}/${fileName}`;
+    console.log('📤 Uploading public profile photo to profile-photos bucket:', storagePath);
+    
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from('profile-photos') // Dedicated bucket for public profile photos (like Instagram posts)
+      .upload(storagePath, uint8Array, {
+        contentType: 'image/jpeg',
+        upsert: false,
+      });
+
+    if (uploadError) {
+      console.error('❌ Storage upload error:', uploadError);
+      throw new Error(
+        `Failed to upload photo: ${uploadError.message}\n\n` +
+        `Make sure the 'profile-photos' bucket exists in Supabase Storage.\n` +
+        `See CREATE_PROFILE_PHOTOS_BUCKET.md for setup instructions.`
+      );
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from('profile-photos')
+      .getPublicUrl(uploadData.path);
+
+    const imageUrl = urlData.publicUrl;
+
+    // Insert into public_profile_photos table
+    const { data: photoData, error: insertError } = await supabase
+      .from('public_profile_photos')
+      .insert([
+        {
+          user_id: userId,
+          image_url: imageUrl,
+          caption: caption || null,
+        }
+      ])
+      .select()
+      .single();
+
+    if (insertError) {
+      console.error('❌ Error inserting public profile photo:', insertError);
+      // Try to clean up the uploaded file
+      try {
+        await supabase.storage
+          .from('profile-photos')
+          .remove([uploadData.path]);
+      } catch (cleanupError) {
+        console.error('Error cleaning up uploaded file:', cleanupError);
+      }
+      throw new Error(`Failed to save photo: ${insertError.message}`);
+    }
+
+    console.log('✅ Public profile photo uploaded successfully');
+    return imageUrl;
+  } catch (error) {
+    console.error('Error uploading public profile photo:', error);
+    throw error;
   }
 };
 

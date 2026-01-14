@@ -13,19 +13,21 @@ import {
   RefreshControl,
   Image,
   Dimensions,
+  Switch,
+  PermissionsAndroid,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import { launchImageLibrary } from 'react-native-image-picker';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useRolls } from '../contexts/RollsContext';
 import { setRollPublic } from '../services/publicProfile';
+import { uploadRollTitleImage } from '../services/storage';
 import { supabase } from '../lib/supabase';
 import colors from '../constants/colors';
 
 const { width } = Dimensions.get('window');
-const PHOTO_GRID_SIZE = (width - 60) / 3; // 3 columns with margins
-
 const RollsScreen = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
@@ -42,14 +44,16 @@ const RollsScreen = () => {
   const [creating, setCreating] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [isPublic, setIsPublic] = useState(false);
+  const [titleImageUri, setTitleImageUri] = useState(null);
+  const [titleImageBase64, setTitleImageBase64] = useState(null);
+  const [uploadingTitleImage, setUploadingTitleImage] = useState(false);
 
   const ownedRolls = getOwnedRolls();
   const contributedRolls = getContributedRolls();
   const activeRolls = rolls.filter(roll => roll.status === 'active');
   const archivedRolls = rolls.filter(roll => roll.status === 'archived');
   const [imageCounts, setImageCounts] = useState({});
-  const [recentPhotos, setRecentPhotos] = useState([]);
-  const [loadingRecentPhotos, setLoadingRecentPhotos] = useState(false);
 
   // Fetch image counts for all rolls
   const fetchImageCounts = async () => {
@@ -59,7 +63,8 @@ const RollsScreen = () => {
         const { count, error } = await supabase
           .from('roll_images')
           .select('*', { count: 'exact', head: true })
-          .eq('roll_id', roll.id);
+          .eq('roll_id', roll.id)
+          .neq('caption', '__title_image__'); // Exclude title images (they're separate)
         
         if (!error) {
           counts[roll.id] = count || 0;
@@ -75,70 +80,63 @@ const RollsScreen = () => {
   useEffect(() => {
     if (rolls.length > 0) {
       fetchImageCounts();
-      fetchRecentPhotos();
     }
   }, [rolls]);
-
-  // Fetch recent photos from all active rolls
-  const fetchRecentPhotos = async () => {
-    if (activeRolls.length === 0) {
-      setRecentPhotos([]);
-      return;
-    }
-
-    try {
-      setLoadingRecentPhotos(true);
-      const rollIds = activeRolls.map(roll => roll.id);
-      
-      if (rollIds.length === 0) {
-        setRecentPhotos([]);
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from('roll_images')
-        .select('id, image_url, roll_id, created_at, rolls(title)')
-        .in('roll_id', rollIds)
-        .order('created_at', { ascending: false })
-        .limit(12); // Show up to 12 recent photos
-
-      if (error) {
-        console.error('Error fetching recent photos:', error);
-        // If join fails, try without the join
-        if (error.message?.includes('rolls') || error.code === 'PGRST116') {
-          const { data: simpleData, error: simpleError } = await supabase
-            .from('roll_images')
-            .select('id, image_url, roll_id, created_at')
-            .in('roll_id', rollIds)
-            .order('created_at', { ascending: false })
-            .limit(12);
-          
-          if (simpleError) throw simpleError;
-          setRecentPhotos(simpleData || []);
-          return;
-        }
-        throw error;
-      }
-      setRecentPhotos(data || []);
-    } catch (error) {
-      console.error('Error fetching recent photos:', error);
-      setRecentPhotos([]);
-    } finally {
-      setLoadingRecentPhotos(false);
-    }
-  };
 
   const onRefresh = async () => {
     setRefreshing(true);
     try {
       await fetchRolls();
-      await fetchRecentPhotos();
       // Image counts will be updated via the useEffect when rolls update
     } catch (error) {
       console.error('Error refreshing rolls:', error);
     } finally {
       setRefreshing(false);
     }
+  };
+
+  const handleTitleImagePicker = async () => {
+    // Request permissions on Android
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
+          {
+            title: 'Photo Access',
+            message: 'Rolls needs access to your photos to set a title image.',
+            buttonNeutral: 'Ask Me Later',
+            buttonNegative: 'Cancel',
+            buttonPositive: 'OK',
+          }
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          Alert.alert('Permission Denied', 'Photo access is required to set a title image.');
+          return;
+        }
+      } catch (err) {
+        console.warn('Permission error:', err);
+      }
+    }
+
+    const options = {
+      mediaType: 'photo',
+      quality: 0.8,
+      includeBase64: true,
+    };
+
+    launchImageLibrary(options, (response) => {
+      if (response.didCancel || response.errorCode) {
+        return;
+      }
+
+      if (response.assets && response.assets[0]) {
+        const asset = response.assets[0];
+        setTitleImageUri(asset.uri);
+        if (asset.base64) {
+          setTitleImageBase64(asset.base64);
+        }
+      }
+    });
   };
 
   const handleCreateRoll = async () => {
@@ -162,18 +160,40 @@ const RollsScreen = () => {
 
     setCreating(true);
     try {
-      await createRoll({
+      // Create roll first to get the roll ID
+      const roll = await createRoll({
         name: rollName.trim(),
         description: rollDescription.trim() || null,
         submission_deadline: submissionDeadline.toISOString(),
         release_date: releaseDate ? releaseDate.toISOString() : null,
         status: 'active',
+        is_public: isPublic,
       });
+
+      // Upload title image if selected
+      if (titleImageUri && titleImageBase64) {
+        setUploadingTitleImage(true);
+        try {
+          const titleImageUrl = await uploadRollTitleImage(roll.id, titleImageUri, titleImageBase64);
+          // Update roll with title image URL
+          // Title images are public and separate from roll images (which are locked until release date)
+          await updateRoll(roll.id, { title_image_url: titleImageUrl });
+          // Title images are NOT stored in roll_images - they're separate and always public
+        } catch (uploadError) {
+          console.error('Error uploading title image:', uploadError);
+          // Don't fail the roll creation if image upload fails
+          Alert.alert('Warning', 'Roll created but title image upload failed. You can add it later.');
+        } finally {
+          setUploadingTitleImage(false);
+        }
+      }
       
       setRollName('');
       setRollDescription('');
       setSubmissionDeadline(new Date());
       setReleaseDate(null);
+      setIsPublic(false);
+      setTitleImageUri(null);
       setShowCreateModal(false);
       Alert.alert('Success', 'Roll created successfully!');
     } catch (error) {
@@ -181,6 +201,7 @@ const RollsScreen = () => {
       Alert.alert('Error', error.message || 'Failed to create roll');
     } finally {
       setCreating(false);
+      setUploadingTitleImage(false);
     }
   };
 
@@ -410,37 +431,6 @@ const RollsScreen = () => {
           </View>
         ) : (
           <>
-            {/* Recent Photos Section */}
-            {recentPhotos.length > 0 && (
-              <View style={styles.section}>
-                <View style={styles.sectionHeader}>
-                  <Ionicons name="images" size={20} color={colors.primary} />
-                  <Text style={styles.sectionTitle}>Recent Photos</Text>
-                </View>
-                <View style={styles.photosGrid}>
-                  {recentPhotos.map((photo) => (
-                    <TouchableOpacity
-                      key={photo.id}
-                      style={styles.photoGridItem}
-                      onPress={() => {
-                        navigation.navigate('RollDetail', { 
-                          rollId: photo.roll_id,
-                          initialRoll: activeRolls.find(r => r.id === photo.roll_id)
-                        });
-                      }}
-                      activeOpacity={0.8}
-                    >
-                      <Image
-                        source={{ uri: photo.image_url }}
-                        style={styles.photoGridImage}
-                        resizeMode="cover"
-                      />
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-            )}
-
             {/* Active Rolls - Owned */}
             {ownedRolls.filter(r => r.status === 'active').length > 0 && (
               <View style={styles.section}>
@@ -503,7 +493,12 @@ const RollsScreen = () => {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.modalBody}>
+            <ScrollView
+              style={styles.modalBody}
+              contentContainerStyle={styles.modalBodyContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
               <Text style={styles.inputLabel}>Roll Name *</Text>
               <TextInput
                 style={styles.input}
@@ -619,7 +614,7 @@ const RollsScreen = () => {
                   <Text style={styles.createRollButtonText}>Update Roll</Text>
                 )}
               </TouchableOpacity>
-            </View>
+            </ScrollView>
           </View>
         </View>
       )}
@@ -637,6 +632,9 @@ const RollsScreen = () => {
                   setRollDescription('');
                   setSubmissionDeadline(new Date());
                   setReleaseDate(null);
+                  setIsPublic(false);
+                  setTitleImageUri(null);
+                  setTitleImageBase64(null);
                   setShowSubmissionDatePicker(false);
                   setShowReleaseDatePicker(false);
                 }}
@@ -646,7 +644,12 @@ const RollsScreen = () => {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.modalBody}>
+            <ScrollView
+              style={styles.modalBody}
+              contentContainerStyle={styles.modalBodyContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
               <Text style={styles.inputLabel}>Roll Name *</Text>
               <TextInput
                 style={styles.input}
@@ -759,18 +762,72 @@ const RollsScreen = () => {
                 />
               )}
 
+              <Text style={[styles.inputLabel, styles.inputLabelMargin]}>Title Image (Optional)</Text>
+              <Text style={styles.inputHelperText}>
+                Upload an image to appear at the top of this roll
+              </Text>
               <TouchableOpacity
-                style={[styles.createRollButton, creating && styles.createRollButtonDisabled]}
-                onPress={handleCreateRoll}
-                disabled={creating}
+                style={styles.titleImageButton}
+                onPress={handleTitleImagePicker}
+                activeOpacity={0.7}
+                disabled={uploadingTitleImage}
               >
-                {creating ? (
+                {titleImageUri ? (
+                  <Image source={{ uri: titleImageUri }} style={styles.titleImagePreview} />
+                ) : (
+                  <View style={styles.titleImagePlaceholder}>
+                    <Ionicons name="image-outline" size={32} color={colors.textSecondary} />
+                    <Text style={styles.titleImagePlaceholderText}>Select Title Image</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+              {titleImageUri && (
+                <TouchableOpacity
+                  style={styles.removeTitleImageButton}
+                  onPress={() => {
+                    setTitleImageUri(null);
+                    setTitleImageBase64(null);
+                  }}
+                >
+                  <Ionicons name="close-circle" size={20} color={colors.error} />
+                  <Text style={styles.removeTitleImageText}>Remove</Text>
+                </TouchableOpacity>
+              )}
+
+              <View style={[styles.inputLabelMargin, styles.publicToggleContainer]}>
+                <View style={styles.publicToggleRow}>
+                  <View style={styles.publicToggleLabelContainer}>
+                    <Ionicons 
+                      name={isPublic ? 'globe' : 'lock-closed'} 
+                      size={20} 
+                      color={isPublic ? colors.primary : colors.textSecondary} 
+                    />
+                    <Text style={styles.publicToggleLabel}>Make this roll public</Text>
+                  </View>
+                  <Switch
+                    value={isPublic}
+                    onValueChange={setIsPublic}
+                    trackColor={{ false: colors.inputBorder, true: colors.primary + '80' }}
+                    thumbColor={isPublic ? colors.primary : colors.textSecondary}
+                  />
+                </View>
+                <Text style={styles.inputHelperText}>
+                  Public rolls will appear on your profile after the release date
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.createRollButton, (creating || uploadingTitleImage) && styles.createRollButtonDisabled]}
+                onPress={handleCreateRoll}
+                disabled={creating || uploadingTitleImage}
+              >
+                {(creating || uploadingTitleImage) ? (
                   <ActivityIndicator color={colors.buttonText} />
                 ) : (
                   <Text style={styles.createRollButtonText}>Create Roll</Text>
                 )}
               </TouchableOpacity>
-            </View>
+            </ScrollView>
           </View>
         </View>
       )}
@@ -868,11 +925,6 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     paddingHorizontal: 20,
   },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
   sectionTitle: {
     fontSize: 18,
     fontWeight: 'bold',
@@ -962,6 +1014,61 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontWeight: '600',
   },
+  publicToggleContainer: {
+    marginTop: 8,
+  },
+  publicToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  publicToggleLabelContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  publicToggleLabel: {
+    fontSize: 16,
+    color: colors.textPrimary,
+    marginLeft: 8,
+  },
+  titleImageButton: {
+    width: '100%',
+    height: 150,
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginTop: 8,
+    backgroundColor: colors.inputBackground,
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
+  },
+  titleImagePreview: {
+    width: '100%',
+    height: '100%',
+  },
+  titleImagePlaceholder: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  titleImagePlaceholderText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  removeTitleImageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    alignSelf: 'flex-start',
+  },
+  removeTitleImageText: {
+    marginLeft: 4,
+    fontSize: 14,
+    color: colors.error,
+  },
   rollCardStatus: {
     fontSize: 12,
     color: colors.textSecondary,
@@ -983,23 +1090,6 @@ const styles = StyleSheet.create({
   rollCardDate: {
     fontSize: 12,
     color: colors.textSecondary,
-  },
-  photosGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'flex-start',
-  },
-  photoGridItem: {
-    width: PHOTO_GRID_SIZE,
-    height: PHOTO_GRID_SIZE,
-    margin: 5,
-    borderRadius: 8,
-    overflow: 'hidden',
-    backgroundColor: colors.inputBackground,
-  },
-  photoGridImage: {
-    width: '100%',
-    height: '100%',
   },
   emptyContainer: {
     padding: 40,
@@ -1046,6 +1136,8 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     width: '90%',
     maxWidth: 400,
+    // Only constrains on small screens; doesn't change the "look" unless content overflows.
+    maxHeight: '85%',
     shadowColor: '#000',
     shadowOffset: {
       width: 0,
@@ -1072,7 +1164,11 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   modalBody: {
-    padding: 20,
+    paddingHorizontal: 20,
+  },
+  modalBodyContent: {
+    paddingTop: 20,
+    paddingBottom: 28,
   },
   inputLabel: {
     fontSize: 14,

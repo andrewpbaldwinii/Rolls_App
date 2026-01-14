@@ -96,20 +96,44 @@ export const RollsProvider = ({ children }) => {
     }
 
     try {
-      const { data: roll, error: createError } = await supabase
+      const insertPayload = {
+        title: rollData.name, // Using rollData.name for consistency with UI, maps to 'title' in DB
+        description: rollData.description || null,
+        submission_deadline: rollData.submission_deadline || null,
+        release_date: rollData.release_date || null, // Can be null - photos visible immediately if not set
+        creator_id: user.id,
+        status: rollData.status || 'active',
+        is_public: rollData.is_public || false,
+        title_image_url: rollData.title_image_url || null,
+      };
+
+      let roll;
+      let createError;
+
+      // Attempt insert with newest schema fields
+      ({ data: roll, error: createError } = await supabase
         .from('rolls')
-        .insert([
-          {
-            title: rollData.name, // Using rollData.name for consistency with UI, maps to 'title' in DB
-            description: rollData.description || null,
-            submission_deadline: rollData.submission_deadline || null,
-            release_date: rollData.release_date || null, // Can be null - photos visible immediately if not set
-            creator_id: user.id,
-            status: rollData.status || 'active',
-          },
-        ])
+        .insert([insertPayload])
         .select()
-        .single();
+        .single());
+
+      // If schema cache/column missing, retry without new columns so the app still works
+      if (
+        createError &&
+        (createError.message?.includes('is_public') ||
+          createError.message?.includes('title_image_url') ||
+          createError.message?.toLowerCase()?.includes('schema cache'))
+      ) {
+        console.warn(
+          'Rolls table is missing is_public/title_image_url. Retrying without those fields. Run ROLLS_PUBLIC_AND_TITLE_IMAGE_MIGRATION.sql in Supabase.'
+        );
+        const { is_public, title_image_url, ...fallbackPayload } = insertPayload;
+        ({ data: roll, error: createError } = await supabase
+          .from('rolls')
+          .insert([fallbackPayload])
+          .select()
+          .single());
+      }
 
       if (createError) throw createError;
 
@@ -151,7 +175,23 @@ export const RollsProvider = ({ children }) => {
         .select()
         .single();
 
-      if (updateError) throw updateError;
+      if (updateError) {
+        // PostgREST schema cache / missing column errors
+        if (
+          updateError.code === 'PGRST204' &&
+          (updateError.message?.includes('title_image_url') ||
+            updateError.message?.includes('is_public') ||
+            updateError.message?.toLowerCase()?.includes('schema cache'))
+        ) {
+          throw new Error(
+            'Your Supabase database is missing new Roll columns (or the API schema cache has not refreshed).\n\n' +
+              'In Supabase Dashboard → SQL Editor, run:\n' +
+              '- ROLLS_PUBLIC_AND_TITLE_IMAGE_MIGRATION.sql\n\n' +
+              'Then retry. If it still fails, wait 1–2 minutes or restart the Supabase API/project to refresh the schema cache.'
+          );
+        }
+        throw updateError;
+      }
 
       await fetchRolls();
       return data;
@@ -271,7 +311,8 @@ export const RollsProvider = ({ children }) => {
       const { count, error } = await supabase
         .from('roll_images')
         .select('*', { count: 'exact', head: true })
-        .eq('roll_id', rollId);
+        .eq('roll_id', rollId)
+        .neq('caption', '__title_image__'); // Exclude title images (they're separate)
 
       if (error) throw error;
       return count || 0;

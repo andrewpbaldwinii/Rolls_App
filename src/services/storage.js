@@ -166,6 +166,122 @@ export const uploadRollImage = async (rollId, imagePath, base64Data = null) => {
 };
 
 /**
+ * Upload a title image for a Roll
+ * @param {string} rollId - The Roll ID
+ * @param {string} imagePath - Local file path (from image picker)
+ * @param {string} base64Data - Optional base64 data (preferred for Android content:// URIs)
+ * @returns {Promise<string>} Public URL of the uploaded image
+ */
+export const uploadRollTitleImage = async (rollId, imagePath, base64Data = null) => {
+  try {
+    // Validate rollId
+    if (!rollId) {
+      throw new Error('Roll ID is required to upload a title image');
+    }
+
+    // Create a unique filename
+    const timestamp = Date.now();
+    const fileName = `title_${timestamp}.jpg`;
+    const storagePath = `${rollId}/title/${fileName}`;
+
+    let uint8Array;
+
+    // If base64 data is provided, use it directly
+    if (base64Data && base64Data.length > 0) {
+      console.log('✅ Using base64 data for title image upload');
+      try {
+        let base64String = base64Data;
+        if (base64Data.includes(',')) {
+          base64String = base64Data.split(',')[1];
+        }
+        
+        const binaryString = atob(base64String);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        uint8Array = bytes;
+      } catch (base64Error) {
+        console.error('❌ Error converting base64:', base64Error);
+        throw new Error('Failed to process image data. Please try selecting the image again.');
+      }
+    } else {
+      // Fallback to reading from file URI
+      let fileUri = imagePath;
+      if (!imagePath.startsWith('file://') && !imagePath.startsWith('content://')) {
+        fileUri = `file://${imagePath}`;
+      }
+
+      const response = await fetch(fileUri);
+      if (!response.ok) {
+        throw new Error(`Failed to read file: ${response.status} ${response.statusText}`);
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      uint8Array = new Uint8Array(arrayBuffer);
+    }
+
+    // Upload to Supabase Storage
+    console.log('📤 Uploading title image to path:', storagePath);
+    const { data, error } = await supabase.storage
+      .from('roll-images')
+      .upload(storagePath, uint8Array, {
+        contentType: 'image/jpeg',
+        upsert: true, // Allow overwriting existing title images
+      });
+
+    if (error) {
+      console.error('❌ Title image upload error:', error);
+      throw new Error(`Failed to upload title image: ${error.message}`);
+    }
+
+    console.log('✅ Title image uploaded successfully. Upload response path:', data.path);
+    console.log('📁 Storage path used:', storagePath);
+    console.log('📁 Data.path returned:', data.path);
+
+    // Get public URL - use the path returned from upload (should match storagePath)
+    const { data: urlData } = supabase.storage
+      .from('roll-images')
+      .getPublicUrl(data.path);
+
+    console.log('🔗 Generated public URL:', urlData.publicUrl);
+    console.log('🔗 URL path component:', urlData.publicUrl.split('/storage/v1/object/public/roll-images/')[1]);
+
+    return urlData.publicUrl;
+  } catch (error) {
+    console.error('Error uploading title image:', error);
+    throw error;
+  }
+};
+
+/**
+ * NOTE: Title images are NOT stored in roll_images table.
+ * 
+ * Title images are:
+ * - Public and always visible (not locked by release date)
+ * - Stored only in rolls.title_image_url
+ * - Separate from roll images (photos taken from CameraScreen)
+ * 
+ * Roll images are:
+ * - Locked until release_date is met
+ * - Only actual photos taken/uploaded from CameraScreen
+ * - Stored in roll_images table
+ * 
+ * This function is kept for backwards compatibility but does nothing.
+ * Title images should only exist in rolls.title_image_url.
+ * 
+ * @param {string} rollId
+ * @param {string} imageUrl
+ * @param {string} contributorId
+ */
+export const upsertTitleImageAsRollImage = async (rollId, imageUrl, contributorId) => {
+  // Title images are NOT stored in roll_images - they're separate and always public
+  // This function is a no-op for backwards compatibility
+  console.log('Title image stored in rolls.title_image_url only (not in roll_images)');
+  return;
+};
+
+/**
  * Delete an image from Supabase Storage
  * @param {string} imageUrl - Full URL or path to the image
  */
