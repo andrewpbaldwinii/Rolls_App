@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,18 +8,111 @@ import {
   Switch,
   Platform,
   StatusBar,
+  Image,
+  Dimensions,
+  FlatList,
+  RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../lib/supabase';
+import { getUserPhotos } from '../services/publicProfile';
 import colors from '../constants/colors';
 
-const ProfileScreen = () => {
+const { width } = Dimensions.get('window');
+const GRID_SIZE = (width - 60) / 3; // 3 columns with margins
+
+const ProfileScreen = ({ navigation }) => {
   const { user, signOut } = useAuth();
   const insets = useSafeAreaInsets();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
   const [darkModeEnabled, setDarkModeEnabled] = useState(false);
+  const [userProfile, setUserProfile] = useState(null);
+  const [loadingProfile, setLoadingProfile] = useState(true);
+  const [userPhotos, setUserPhotos] = useState([]);
+  const [loadingPhotos, setLoadingPhotos] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Fetch user profile from public.users table
+  const fetchUserProfile = async () => {
+    if (!user?.id) {
+      setLoadingProfile(false);
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('username, display_name, email, avatar_url')
+        .eq('id', user.id)
+        .single();
+
+      if (error) {
+        console.error('Error fetching user profile:', error);
+        // Fallback to email-based values if profile doesn't exist
+        setUserProfile({
+          username: user.email?.split('@')[0] || 'user',
+          display_name: user.email?.split('@')[0] || 'User',
+        });
+      } else {
+        setUserProfile(data);
+      }
+    } catch (error) {
+      console.error('Error fetching profile:', error);
+      setUserProfile({
+        username: user.email?.split('@')[0] || 'user',
+        display_name: user.email?.split('@')[0] || 'User',
+      });
+    } finally {
+      setLoadingProfile(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchUserProfile();
+  }, [user?.id]);
+
+  // Fetch user photos
+  const fetchUserPhotos = async () => {
+    if (!user?.id) {
+      setLoadingPhotos(false);
+      return;
+    }
+
+    try {
+      setLoadingPhotos(true);
+      const photos = await getUserPhotos(user.id);
+      // Ensure photos is an array
+      setUserPhotos(Array.isArray(photos) ? photos : []);
+    } catch (error) {
+      console.error('Error fetching user photos:', error);
+      setUserPhotos([]);
+    } finally {
+      setLoadingPhotos(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchUserPhotos();
+  }, [user?.id]);
+
+  // Pull to refresh handler
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      // Refresh both profile and photos
+      await Promise.all([
+        fetchUserProfile(),
+        fetchUserPhotos(),
+      ]);
+    } catch (error) {
+      console.error('Error refreshing profile:', error);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const handleSignOut = async () => {
     try {
@@ -29,12 +122,12 @@ const ProfileScreen = () => {
     }
   };
 
-  // Get user display name and handle
-  // TODO: Get from user metadata or profile table
-  const displayName = user?.user_metadata?.full_name || 
-                     user?.user_metadata?.name || 
+  // Get user display name and username from profile, with fallbacks
+  const displayName = userProfile?.display_name || 
+                     userProfile?.username ||
+                     user?.email?.split('@')[0] || 
                      'User';
-  const username = user?.user_metadata?.username || 
+  const username = userProfile?.username || 
                   user?.email?.split('@')[0] || 
                   'user';
   
@@ -48,11 +141,11 @@ const ProfileScreen = () => {
   };
   const initials = getInitials(displayName);
 
-  // TODO: Replace with real data from Supabase
+  // Calculate stats from actual data
   const stats = {
-    rollsCreated: 0,
-    photosTaken: 0,
-    memoriesShared: 0,
+    rollsCreated: 0, // TODO: Fetch from rolls
+    photosTaken: userPhotos?.length || 0,
+    memoriesShared: userPhotos?.filter(p => p.rolls?.is_public).length || 0,
   };
 
   const SettingItem = ({ icon, label, onPress, rightElement }) => (
@@ -84,14 +177,30 @@ const ProfileScreen = () => {
         style={styles.scrollView} 
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.buttonPrimary}
+            colors={[colors.buttonPrimary]}
+          />
+        }
       >
         {/* Profile Summary Card */}
         <View style={styles.profileCard}>
           {/* Profile Picture */}
           <View style={styles.profilePictureContainer}>
-            <View style={styles.profilePicture}>
-              <Text style={styles.profileInitials}>{initials}</Text>
-            </View>
+            {userProfile?.avatar_url ? (
+              <Image
+                source={{ uri: userProfile.avatar_url }}
+                style={styles.profilePicture}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.profilePicture}>
+                <Text style={styles.profileInitials}>{initials}</Text>
+              </View>
+            )}
           </View>
           
           {/* User Name */}
@@ -121,12 +230,12 @@ const ProfileScreen = () => {
           <SettingItem
             icon="person-outline"
             label="Edit Profile"
-            onPress={() => console.log('Edit Profile')}
+            onPress={() => navigation?.navigate('EditProfile')}
           />
           <SettingItem
             icon="eye-outline"
             label="View Public Profile"
-            onPress={() => console.log('View Public Profile')}
+            onPress={() => navigation?.navigate('PublicProfile', { userId: user?.id })}
           />
           <SettingItem
             icon="shield-checkmark-outline"
@@ -170,6 +279,55 @@ const ProfileScreen = () => {
             label="Archived Rolls"
             onPress={() => console.log('Archived Rolls')}
           />
+        </View>
+
+        {/* My Photos Section */}
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>My Photos</Text>
+          {loadingPhotos ? (
+            <View style={styles.photosLoading}>
+              <Text style={styles.loadingText}>Loading photos...</Text>
+            </View>
+          ) : userPhotos.length === 0 ? (
+            <View style={styles.emptyPhotos}>
+              <Ionicons name="images-outline" size={48} color={colors.textSecondary} />
+              <Text style={styles.emptyPhotosText}>No photos yet</Text>
+              <Text style={styles.emptyPhotosSubtext}>Start taking photos to see them here</Text>
+            </View>
+          ) : (
+            <View style={styles.photosGrid}>
+              {userPhotos.slice(0, 9).map((photo) => (
+                <TouchableOpacity
+                  key={photo.id}
+                  style={styles.photoGridItem}
+                  onPress={() => {
+                    // TODO: Navigate to photo detail or roll
+                    console.log('Photo tapped:', photo.id);
+                  }}
+                >
+                  <Image
+                    source={{ uri: photo.image_url }}
+                    style={styles.photoGridImage}
+                    resizeMode="cover"
+                  />
+                </TouchableOpacity>
+              ))}
+              {userPhotos.length > 9 && (
+                <TouchableOpacity
+                  style={styles.photoGridItem}
+                  onPress={() => {
+                    // TODO: Navigate to all photos view
+                    console.log('View all photos');
+                  }}
+                >
+                  <View style={styles.morePhotosOverlay}>
+                    <Text style={styles.morePhotosText}>+{userPhotos.length - 9}</Text>
+                    <Text style={styles.morePhotosLabel}>More</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
         </View>
 
         {/* Preferences Section */}
@@ -299,6 +457,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 3,
     borderColor: colors.primaryDark,
+    overflow: 'hidden',
   },
   profileInitials: {
     fontSize: 32,
@@ -409,6 +568,64 @@ const styles = StyleSheet.create({
   },
   bottomSpacing: {
     height: 20,
+  },
+  photosLoading: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  loadingText: {
+    color: colors.textSecondary,
+    fontSize: 14,
+  },
+  emptyPhotos: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  emptyPhotosText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textPrimary,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  emptyPhotosSubtext: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  photosGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    padding: 10,
+    justifyContent: 'flex-start',
+  },
+  photoGridItem: {
+    width: GRID_SIZE,
+    height: GRID_SIZE,
+    margin: 5,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: colors.inputBackground,
+  },
+  photoGridImage: {
+    width: '100%',
+    height: '100%',
+  },
+  morePhotosOverlay: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: colors.inputBackground,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  morePhotosText: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: colors.primary,
+    marginBottom: 4,
+  },
+  morePhotosLabel: {
+    fontSize: 12,
+    color: colors.textSecondary,
   },
 });
 

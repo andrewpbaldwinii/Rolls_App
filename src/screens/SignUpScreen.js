@@ -18,10 +18,11 @@ const SignUpScreen = ({ navigation }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleSignUp = async () => {
-    if (!email || !password || !confirmPassword) {
+    if (!email || !password || !confirmPassword || !username.trim()) {
       Alert.alert('Error', 'Please fill in all fields');
       return;
     }
@@ -36,19 +37,146 @@ const SignUpScreen = ({ navigation }) => {
       return;
     }
 
+    if (username.trim().length < 3) {
+      Alert.alert('Error', 'Username must be at least 3 characters');
+      return;
+    }
+
+    // Check username format (alphanumeric and underscores only)
+    if (!/^[a-zA-Z0-9_]+$/.test(username.trim())) {
+      Alert.alert('Error', 'Username can only contain letters, numbers, and underscores');
+      return;
+    }
+
     setLoading(true);
     try {
+      console.log('Starting signup process...');
+      
+      // Create auth account
       const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
         password: password,
       });
 
       if (error) {
-        Alert.alert('Sign Up Error', error.message);
+        console.error('Auth signup error:', error);
+        console.error('Error code:', error.code || 'N/A');
+        console.error('Error message:', error.message);
+        console.error('Full error:', JSON.stringify(error, null, 2));
+        Alert.alert(
+          'Sign Up Error', 
+          `${error.message}${error.code ? `\n\nError Code: ${error.code}` : ''}`
+        );
         return;
       }
 
+      console.log('Auth account created:', data.user?.id);
+
       if (data.user) {
+        // Wait a moment for the database trigger to create the profile
+        // Then update it with the username the user chose
+        console.log('Waiting for trigger to create profile...');
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        
+        // Check if profile exists first
+        const { data: existingProfile, error: checkError } = await supabase
+          .from('users')
+          .select('id, username, display_name')
+          .eq('id', data.user.id)
+          .single();
+        
+        console.log('Profile check result:', { existingProfile, checkError });
+        
+        const trimmedUsername = username.trim();
+        
+        // Try to update the profile with the username (trigger creates it with email-based default)
+        // Make sure username and display_name are coordinated
+        const { error: profileError } = await supabase
+          .from('users')
+          .update({
+            username: trimmedUsername,
+            display_name: trimmedUsername, // Username and display_name should match
+          })
+          .eq('id', data.user.id);
+
+        if (profileError) {
+          console.error('Error updating profile:', profileError);
+          console.error('Profile error code:', profileError.code);
+          console.error('Profile error message:', profileError.message);
+          console.error('Profile error details:', JSON.stringify(profileError, null, 2));
+          
+          // Check if profile exists - if not, create it
+          if (profileError.code === 'PGRST116' || profileError.message?.includes('No rows')) {
+            console.log('Profile does not exist, creating it...');
+          } else {
+            console.log('Profile update failed, trying to create profile as fallback...');
+          }
+          
+          // Wait a bit more and try again
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          // Check if username is already taken
+          const { data: usernameCheck } = await supabase
+            .from('users')
+            .select('id')
+            .eq('username', trimmedUsername)
+            .neq('id', data.user.id)
+            .single();
+          
+          if (usernameCheck) {
+            Alert.alert(
+              'Username Taken',
+              'This username is already taken. Please choose a different one.',
+              [{ text: 'OK' }]
+            );
+            setLoading(false);
+            return;
+          }
+          
+          const profileData = {
+            id: data.user.id,
+            username: trimmedUsername,
+            display_name: trimmedUsername, // Always keep them in sync
+            email: data.user.email, // Always include email - required for foreign key constraints
+          };
+          
+          console.log('Attempting to insert profile:', profileData);
+          const { error: createError, data: createData } = await supabase
+            .from('users')
+            .insert([profileData])
+            .select();
+          
+          console.log('Insert result:', { createError, createData });
+            
+          if (createError) {
+            console.error('Error creating profile (fallback):', createError);
+            console.error('Create error code:', createError.code);
+            console.error('Create error message:', createError.message);
+            console.error('Create error details:', JSON.stringify(createError, null, 2));
+            
+            // Provide more helpful error messages
+            let errorMessage = createError.message || createError.code || 'Unknown error';
+            if (createError.code === '23505') {
+              errorMessage = 'Username is already taken. Please choose a different username.';
+            } else if (createError.code === '23502') {
+              errorMessage = 'Missing required field. Please contact support.';
+            } else if (createError.message?.includes('permission') || createError.message?.includes('policy')) {
+              errorMessage = 'Permission denied. Please run COMPLETE_PROFILE_SETUP.sql in Supabase.';
+            }
+            
+            Alert.alert(
+              'Account Created',
+              `Your account was created, but there was an issue setting up your profile:\n\n${errorMessage}\n\nPlease check the console for details or contact support.`,
+              [{ text: 'OK', onPress: () => navigation.navigate('Login') }]
+            );
+            return;
+          } else {
+            console.log('Profile created successfully via fallback!');
+          }
+        } else {
+          console.log('Profile updated successfully!');
+        }
+
         Alert.alert(
           'Success',
           'Account created! Please check your email for verification.',
@@ -92,6 +220,17 @@ const SignUpScreen = ({ navigation }) => {
           autoCapitalize="none"
           keyboardType="email-address"
           autoComplete="email"
+        />
+
+        <TextInput
+          style={styles.input}
+          placeholder="Username"
+          placeholderTextColor={colors.inputPlaceholder}
+          value={username}
+          onChangeText={setUsername}
+          autoCapitalize="none"
+          autoComplete="username"
+          autoCorrect={false}
         />
 
         <TextInput

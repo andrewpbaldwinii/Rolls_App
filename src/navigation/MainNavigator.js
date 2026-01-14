@@ -1,5 +1,6 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createStackNavigator } from '@react-navigation/stack';
 import { View, StyleSheet, Platform } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import HomeScreen from '../screens/HomeScreen';
@@ -7,13 +8,17 @@ import NotificationsScreen from '../screens/NotificationsScreen';
 import CameraScreen from '../screens/CameraScreen';
 import RollsScreen from '../screens/RollsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import PublicProfileScreen from '../screens/PublicProfileScreen';
+import RollDetailScreen from '../screens/RollDetailScreen';
+import EditProfileScreen from '../screens/EditProfileScreen';
 import CameraButton from '../components/CameraButton';
 import NotificationBadge from '../components/NotificationBadge';
 import colors from '../constants/colors';
 
 const Tab = createBottomTabNavigator();
+const Stack = createStackNavigator();
 
-const MainNavigator = () => {
+const TabNavigator = () => {
   // TODO: Replace with actual notification count from context/state
   const notificationCount = 0; // Placeholder
 
@@ -143,5 +148,39 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 });
+
+const MainNavigator = () => {
+  return (
+    <Stack.Navigator
+      screenOptions={{
+        headerShown: false,
+      }}
+    >
+      <Stack.Screen name="MainTabs" component={TabNavigator} />
+      <Stack.Screen 
+        name="PublicProfile" 
+        component={PublicProfileScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="RollDetail"
+        component={RollDetailScreen}
+        options={{
+          headerShown: false,
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="EditProfile"
+        component={EditProfileScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+    </Stack.Navigator>
+  );
+};
 
 export default MainNavigator;

@@ -10,17 +10,25 @@ import {
   ActivityIndicator,
   StatusBar,
   Platform,
+  RefreshControl,
+  Image,
+  Dimensions,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useRolls } from '../contexts/RollsContext';
 import { setRollPublic } from '../services/publicProfile';
 import { supabase } from '../lib/supabase';
 import colors from '../constants/colors';
 
+const { width } = Dimensions.get('window');
+const PHOTO_GRID_SIZE = (width - 60) / 3; // 3 columns with margins
+
 const RollsScreen = () => {
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation();
   const { rolls, loading, error, createRoll, updateRoll, fetchRolls, getOwnedRolls, getContributedRolls } = useRolls();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -33,39 +41,105 @@ const RollsScreen = () => {
   const [showReleaseDatePicker, setShowReleaseDatePicker] = useState(false);
   const [creating, setCreating] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const ownedRolls = getOwnedRolls();
   const contributedRolls = getContributedRolls();
   const activeRolls = rolls.filter(roll => roll.status === 'active');
   const archivedRolls = rolls.filter(roll => roll.status === 'archived');
   const [imageCounts, setImageCounts] = useState({});
+  const [recentPhotos, setRecentPhotos] = useState([]);
+  const [loadingRecentPhotos, setLoadingRecentPhotos] = useState(false);
 
   // Fetch image counts for all rolls
-  useEffect(() => {
-    const fetchImageCounts = async () => {
-      const counts = {};
-      for (const roll of rolls) {
-        try {
-          const { count, error } = await supabase
-            .from('roll_images')
-            .select('*', { count: 'exact', head: true })
-            .eq('roll_id', roll.id);
-          
-          if (!error) {
-            counts[roll.id] = count || 0;
-          }
-        } catch (err) {
-          console.error(`Error fetching count for roll ${roll.id}:`, err);
-          counts[roll.id] = 0;
+  const fetchImageCounts = async () => {
+    const counts = {};
+    for (const roll of rolls) {
+      try {
+        const { count, error } = await supabase
+          .from('roll_images')
+          .select('*', { count: 'exact', head: true })
+          .eq('roll_id', roll.id);
+        
+        if (!error) {
+          counts[roll.id] = count || 0;
         }
+      } catch (err) {
+        console.error(`Error fetching count for roll ${roll.id}:`, err);
+        counts[roll.id] = 0;
       }
-      setImageCounts(counts);
-    };
+    }
+    setImageCounts(counts);
+  };
 
+  useEffect(() => {
     if (rolls.length > 0) {
       fetchImageCounts();
+      fetchRecentPhotos();
     }
   }, [rolls]);
+
+  // Fetch recent photos from all active rolls
+  const fetchRecentPhotos = async () => {
+    if (activeRolls.length === 0) {
+      setRecentPhotos([]);
+      return;
+    }
+
+    try {
+      setLoadingRecentPhotos(true);
+      const rollIds = activeRolls.map(roll => roll.id);
+      
+      if (rollIds.length === 0) {
+        setRecentPhotos([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('roll_images')
+        .select('id, image_url, roll_id, created_at, rolls(title)')
+        .in('roll_id', rollIds)
+        .order('created_at', { ascending: false })
+        .limit(12); // Show up to 12 recent photos
+
+      if (error) {
+        console.error('Error fetching recent photos:', error);
+        // If join fails, try without the join
+        if (error.message?.includes('rolls') || error.code === 'PGRST116') {
+          const { data: simpleData, error: simpleError } = await supabase
+            .from('roll_images')
+            .select('id, image_url, roll_id, created_at')
+            .in('roll_id', rollIds)
+            .order('created_at', { ascending: false })
+            .limit(12);
+          
+          if (simpleError) throw simpleError;
+          setRecentPhotos(simpleData || []);
+          return;
+        }
+        throw error;
+      }
+      setRecentPhotos(data || []);
+    } catch (error) {
+      console.error('Error fetching recent photos:', error);
+      setRecentPhotos([]);
+    } finally {
+      setLoadingRecentPhotos(false);
+    }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await fetchRolls();
+      await fetchRecentPhotos();
+      // Image counts will be updated via the useEffect when rolls update
+    } catch (error) {
+      console.error('Error refreshing rolls:', error);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const handleCreateRoll = async () => {
     if (!rollName.trim()) {
@@ -160,6 +234,9 @@ const RollsScreen = () => {
         release_date: releaseDate ? releaseDate.toISOString() : null,
       });
       
+      // Explicitly refresh rolls to ensure UI updates
+      await fetchRolls();
+      
       setRollName('');
       setRollDescription('');
       setSubmissionDeadline(new Date());
@@ -195,8 +272,7 @@ const RollsScreen = () => {
         style={styles.rollCard}
         activeOpacity={0.7}
         onPress={() => {
-          // TODO: Navigate to roll detail screen
-          Alert.alert('Roll', roll.title);
+          navigation.navigate('RollDetail', { rollId: roll.id, initialRoll: roll });
         }}
       >
         <View style={styles.rollCardHeader}>
@@ -265,7 +341,13 @@ const RollsScreen = () => {
             )}
           </View>
           <Text style={styles.rollCardDate}>
-            {new Date(roll.created_at).toLocaleDateString()}
+            {roll.submission_deadline 
+              ? new Date(roll.submission_deadline).toLocaleDateString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric'
+                })
+              : 'No deadline'}
           </Text>
         </View>
       </TouchableOpacity>
@@ -292,6 +374,14 @@ const RollsScreen = () => {
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.buttonPrimary}
+            colors={[colors.buttonPrimary]}
+          />
+        }
       >
         {loading ? (
           <View style={styles.loadingContainer}>
@@ -320,6 +410,37 @@ const RollsScreen = () => {
           </View>
         ) : (
           <>
+            {/* Recent Photos Section */}
+            {recentPhotos.length > 0 && (
+              <View style={styles.section}>
+                <View style={styles.sectionHeader}>
+                  <Ionicons name="images" size={20} color={colors.primary} />
+                  <Text style={styles.sectionTitle}>Recent Photos</Text>
+                </View>
+                <View style={styles.photosGrid}>
+                  {recentPhotos.map((photo) => (
+                    <TouchableOpacity
+                      key={photo.id}
+                      style={styles.photoGridItem}
+                      onPress={() => {
+                        navigation.navigate('RollDetail', { 
+                          rollId: photo.roll_id,
+                          initialRoll: activeRolls.find(r => r.id === photo.roll_id)
+                        });
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Image
+                        source={{ uri: photo.image_url }}
+                        style={styles.photoGridImage}
+                        resizeMode="cover"
+                      />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
+
             {/* Active Rolls - Owned */}
             {ownedRolls.filter(r => r.status === 'active').length > 0 && (
               <View style={styles.section}>
@@ -745,11 +866,18 @@ const styles = StyleSheet.create({
   },
   section: {
     marginBottom: 24,
+    paddingHorizontal: 20,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: 'bold',
     color: colors.textPrimary,
+    marginLeft: 8,
     marginBottom: 12,
   },
   rollCard: {
@@ -855,6 +983,23 @@ const styles = StyleSheet.create({
   rollCardDate: {
     fontSize: 12,
     color: colors.textSecondary,
+  },
+  photosGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
+  },
+  photoGridItem: {
+    width: PHOTO_GRID_SIZE,
+    height: PHOTO_GRID_SIZE,
+    margin: 5,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: colors.inputBackground,
+  },
+  photoGridImage: {
+    width: '100%',
+    height: '100%',
   },
   emptyContainer: {
     padding: 40,
