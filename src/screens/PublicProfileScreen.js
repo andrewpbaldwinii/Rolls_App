@@ -27,10 +27,15 @@ import {
   unfollowUser,
   isFollowing,
 } from '../services/publicProfile';
+import { getRollImageUrlAsync } from '../services/storage';
 import colors from '../constants/colors';
 
 const { width } = Dimensions.get('window');
-const GRID_SIZE = (width - 4) / 3; // 3 columns with 2px gaps
+// Calculate grid size for exactly 3 columns
+// With 3 items per row: only 2 margins between items (1px each)
+// So: 3 * GRID_SIZE + 2 = width
+// Therefore: GRID_SIZE = (width - 2) / 3
+const GRID_SIZE = Math.floor((width - 2) / 3); // 3 columns: account for 2px total margins between items
 
 const PublicProfileScreen = ({ route, navigation }) => {
   const insets = useSafeAreaInsets();
@@ -43,6 +48,7 @@ const PublicProfileScreen = ({ route, navigation }) => {
   const [publicRolls, setPublicRolls] = useState([]);
   const [publicPhotos, setPublicPhotos] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [rollTitleImageUrls, setRollTitleImageUrls] = useState({});
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [following, setFollowing] = useState(false);
@@ -87,7 +93,26 @@ const PublicProfileScreen = ({ route, navigation }) => {
         !isOwnProfile ? isFollowing(userId) : Promise.resolve(false),
       ]);
 
-      setPublicRolls(rolls.status === 'fulfilled' ? rolls.value : []);
+      const loadedRolls = rolls.status === 'fulfilled' ? rolls.value : [];
+      setPublicRolls(loadedRolls);
+
+      // Process title image URLs for rolls (roll-title-images bucket - public)
+      const titleImageUrlMap = {};
+      await Promise.all(
+        loadedRolls.map(async (roll) => {
+          if (roll.title_image_url) {
+            try {
+              const processedUrl = await getRollImageUrlAsync(roll.title_image_url, 'title');
+              titleImageUrlMap[roll.id] = processedUrl || roll.title_image_url;
+            } catch (err) {
+              console.warn(`Error processing title image for roll ${roll.id}:`, err);
+              titleImageUrlMap[roll.id] = roll.title_image_url;
+            }
+          }
+        })
+      );
+      setRollTitleImageUrls(titleImageUrlMap);
+
       setPublicPhotos(photos.status === 'fulfilled' ? photos.value : []);
       setFollowing(followStatus.status === 'fulfilled' ? followStatus.value : false);
     } catch (error) {
@@ -287,22 +312,32 @@ const PublicProfileScreen = ({ route, navigation }) => {
 
     return (
       <View style={styles.grid}>
-        {publicPhotos.map((photo) => (
-          <TouchableOpacity
-            key={photo.id}
-            style={styles.gridItem}
-            onPress={() => {
-              // TODO: Navigate to photo detail
-              Alert.alert('Photo', photo.caption || 'No caption');
-            }}
-          >
-            <Image
-              source={{ uri: photo.image_url }}
-              style={styles.gridImage}
-              resizeMode="cover"
-            />
-          </TouchableOpacity>
-        ))}
+        {publicPhotos.map((photo, index) => {
+          // Calculate if this is the first item in a row (index % 3 === 0)
+          const isFirstInRow = index % 3 === 0;
+          const isLastInRow = (index + 1) % 3 === 0;
+          
+          return (
+            <TouchableOpacity
+              key={photo.id}
+              style={[
+                styles.gridItem,
+                isFirstInRow && styles.gridItemFirst,
+                isLastInRow && styles.gridItemLast,
+              ]}
+              onPress={() => {
+                // TODO: Navigate to photo detail
+                Alert.alert('Photo', photo.caption || 'No caption');
+              }}
+            >
+              <Image
+                source={{ uri: photo.image_url }}
+                style={styles.gridImage}
+                resizeMode="cover"
+              />
+            </TouchableOpacity>
+          );
+        })}
       </View>
     );
   };
@@ -319,36 +354,46 @@ const PublicProfileScreen = ({ route, navigation }) => {
 
     return (
       <View style={styles.rollsGrid}>
-        {publicRolls.map((roll) => (
-          <TouchableOpacity
-            key={roll.id}
-            style={styles.rollGridItem}
-            onPress={() => {
-              navigation?.navigate('RollDetail', { 
-                rollId: roll.id,
-                initialRoll: roll
-              });
-            }}
-            activeOpacity={0.8}
-          >
-            {roll.title_image_url ? (
-              <Image 
-                source={{ uri: roll.title_image_url }} 
-                style={styles.rollGridImage}
-                resizeMode="cover"
-              />
-            ) : (
-              <View style={styles.rollGridPlaceholder}>
-                <Ionicons name="camera-outline" size={32} color={colors.textSecondary} />
+        {publicRolls.map((roll, index) => {
+          // Calculate if this is the first item in a row (index % 3 === 0)
+          const isFirstInRow = index % 3 === 0;
+          const isLastInRow = (index + 1) % 3 === 0;
+          
+          return (
+            <TouchableOpacity
+              key={roll.id}
+              style={[
+                styles.rollGridItem,
+                isFirstInRow && styles.rollGridItemFirst,
+                isLastInRow && styles.rollGridItemLast,
+              ]}
+              onPress={() => {
+                navigation?.navigate('RollDetail', { 
+                  rollId: roll.id,
+                  initialRoll: roll
+                });
+              }}
+              activeOpacity={0.8}
+            >
+              {rollTitleImageUrls[roll.id] || roll.title_image_url ? (
+                <Image 
+                  source={{ uri: rollTitleImageUrls[roll.id] || roll.title_image_url }} 
+                  style={styles.rollGridImage}
+                  resizeMode="cover"
+                />
+              ) : (
+                <View style={styles.rollGridPlaceholder}>
+                  <Ionicons name="camera-outline" size={32} color={colors.textSecondary} />
+                </View>
+              )}
+              <View style={styles.rollGridOverlay}>
+                <Text style={styles.rollGridTitle} numberOfLines={1}>
+                  {roll.title}
+                </Text>
               </View>
-            )}
-            <View style={styles.rollGridOverlay}>
-              <Text style={styles.rollGridTitle} numberOfLines={1}>
-                {roll.title}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        ))}
+            </TouchableOpacity>
+          );
+        })}
       </View>
     );
   };
@@ -749,11 +794,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     marginTop: 2,
+    width: '100%', // Ensure full width
   },
   gridItem: {
     width: GRID_SIZE,
     height: GRID_SIZE,
-    margin: 1,
+    marginRight: 1,
+    marginBottom: 1,
+  },
+  gridItemFirst: {
+    marginLeft: 0, // No left margin for first item in row
+  },
+  gridItemLast: {
+    marginRight: 0, // No right margin for last item in row
   },
   gridImage: {
     width: '100%',
@@ -773,14 +826,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     marginTop: 2,
+    width: '100%', // Ensure full width
   },
   rollGridItem: {
     width: GRID_SIZE,
     height: GRID_SIZE,
-    margin: 1,
+    marginRight: 1,
+    marginBottom: 1,
     position: 'relative',
     borderRadius: 2,
     overflow: 'hidden',
+  },
+  rollGridItemFirst: {
+    marginLeft: 0, // No left margin for first item in row
+  },
+  rollGridItemLast: {
+    marginRight: 0, // No right margin for last item in row
   },
   rollGridImage: {
     width: '100%',

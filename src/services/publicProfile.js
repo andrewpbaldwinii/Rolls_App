@@ -753,4 +753,3 @@ export const uploadPublicProfilePhoto = async (userId, imagePath, base64Data = n
     throw error;
   }
 };
-

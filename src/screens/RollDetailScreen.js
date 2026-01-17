@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -16,7 +16,7 @@ import {
   PermissionsAndroid,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { useAuth } from '../contexts/AuthContext';
@@ -49,6 +49,9 @@ const RollDetailScreen = () => {
   const [error, setError] = useState(null);
   const [uploadingTitleImage, setUploadingTitleImage] = useState(false);
   const [updatingPublic, setUpdatingPublic] = useState(false);
+  const [titleImageUrl, setTitleImageUrl] = useState(null);
+  const [isContributor, setIsContributor] = useState(false);
+  const [visibleImageIndices, setVisibleImageIndices] = useState(new Set([0, 1, 2, 3, 4, 5])); // Only load first 6 images initially
 
   const isOwner = useMemo(() => {
     return roll && user && roll.creator_id === user.id;
@@ -60,57 +63,166 @@ const RollDetailScreen = () => {
     return release > new Date();
   }, [roll]);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      if (!rollId) {
-        setError('Missing roll id');
-        setLoading(false);
-        return;
-      }
+  // Owners and contributors can always see images (even if locked)
+  // After development date: public rolls visible to all, private rolls only to contributors
+  const canViewImages = useMemo(() => {
+    if (isOwner || isContributor) return true; // Owner/contributors always see
+    if (!isLocked) {
+      // After development date
+      if (roll?.is_public) return true; // Public roll - all users can view
+      return false; // Private roll - only contributors can view
+    }
+    return false; // Before development date - only owner/contributors
+  }, [isOwner, isContributor, isLocked, roll?.is_public]);
 
-      try {
-        setLoading(true);
-        setError(null);
+  const fetchData = useCallback(async () => {
+    if (!rollId) {
+      setError('Missing roll id');
+      setLoading(false);
+      return;
+    }
 
-        // Fetch roll details (if not provided)
-        if (!roll) {
-          const { data, error: rollError } = await supabase
-            .from('rolls')
-            .select('*')
-            .eq('id', rollId)
-            .single();
-          if (rollError) throw rollError;
-          setRoll(data);
-        }
+    try {
+      setLoading(true);
+      setError(null);
 
-        // Fetch roll images (exclude title images - they're separate and stored in rolls.title_image_url)
-        // Title images are public and always visible, roll images are locked until release date
-        const { data: imageData, error: imageError } = await supabase
-          .from('roll_images')
+      // Fetch roll details (if not provided)
+      if (!roll) {
+        const { data, error: rollError } = await supabase
+          .from('rolls')
           .select('*')
-          .eq('roll_id', rollId)
-          .neq('caption', '__title_image__') // Exclude any title images that might exist
-          .order('created_at', { ascending: false });
-        if (imageError) throw imageError;
-        setImages(imageData || []);
-
-        // Fetch contributors count (includes owner)
-        const { count: contribCount, error: contribError } = await supabase
-          .from('roll_contributors')
-          .select('*', { count: 'exact', head: true })
-          .eq('roll_id', rollId);
-        if (contribError) throw contribError;
-        setContributorsCount(contribCount || 0);
-      } catch (err) {
-        console.error('Error loading roll detail:', err);
-        setError(err.message || 'Failed to load roll');
-      } finally {
-        setLoading(false);
+          .eq('id', rollId)
+          .single();
+        if (rollError) throw rollError;
+        setRoll(data);
       }
-    };
 
+      // Process title image URL - ensure it uses roll-title-images bucket (public)
+      if (roll?.title_image_url) {
+        try {
+          const { getRollImageUrlAsync } = await import('../services/storage');
+          const processedTitleUrl = await getRollImageUrlAsync(roll.title_image_url, 'title');
+          setTitleImageUrl(processedTitleUrl || roll.title_image_url);
+        } catch (err) {
+          console.warn('⚠️ Error processing title image URL:', err);
+          setTitleImageUrl(roll.title_image_url); // Fallback to original
+        }
+      } else {
+        setTitleImageUrl(null);
+      }
+
+
+      // Fetch roll images (exclude title images - they're separate and stored in rolls.title_image_url)
+      // Title images are public and always visible, roll images are locked until release date
+      console.log('🔍 Fetching roll images for rollId:', rollId);
+      console.log('🔍 Current user ID:', user?.id);
+      
+      // First, try without the caption filter to see if that's the issue
+      let { data: imageData, error: imageError } = await supabase
+        .from('roll_images')
+        .select('*')
+        .eq('roll_id', rollId)
+        .order('created_at', { ascending: false });
+      
+      if (imageError) {
+        console.error('❌ Error fetching roll images (without filter):', imageError);
+        console.error('Error code:', imageError.code);
+        console.error('Error message:', imageError.message);
+        console.error('Error details:', JSON.stringify(imageError, null, 2));
+        throw imageError;
+      }
+      
+      console.log('📊 Raw image data count (before filter):', imageData?.length || 0);
+      
+      // Filter out title images manually (more reliable than .neq() with nulls)
+      if (imageData && imageData.length > 0) {
+        imageData = imageData.filter(img => img.caption !== '__title_image__');
+        console.log('📊 Filtered image data count (after filter):', imageData.length);
+        
+        // Ensure URLs are valid - generate signed URLs for roll-images bucket (private)
+        const { getRollImageUrlAsync } = await import('../services/storage');
+        console.log('🔄 Processing roll image URLs to generate signed URLs...');
+        const processedImages = await Promise.all(
+          imageData.map(async (img, index) => {
+            try {
+              // Roll images are in roll-images bucket (private) - need signed URLs
+              const validUrl = await getRollImageUrlAsync(img.image_url, 'roll');
+              const isSigned = validUrl?.includes('/storage/v1/object/sign/');
+              console.log(`✅ Roll image ${index + 1} processed:`, {
+                id: img.id,
+                isSigned,
+                urlPreview: validUrl?.substring(0, 80) + '...'
+              });
+              return {
+                ...img,
+                image_url: validUrl || img.image_url
+              };
+            } catch (err) {
+              console.error(`❌ Error processing roll image URL for ${img.id}:`, err);
+              return img; // Return original on error
+            }
+          })
+        );
+        imageData = processedImages;
+        console.log('✅ All roll image URLs processed:', {
+          totalImages: imageData.length
+        });
+      } else {
+        console.warn('⚠️ No images returned from query. Checking if images exist in database...');
+        // Diagnostic query to check if images exist at all
+        const { data: diagnosticData, error: diagnosticError } = await supabase
+          .from('roll_images')
+          .select('id, roll_id, caption, contributor_id')
+          .eq('roll_id', rollId);
+        console.log('🔍 Diagnostic query result:', {
+          count: diagnosticData?.length || 0,
+          error: diagnosticError,
+          sample: diagnosticData?.[0]
+        });
+      }
+      
+      setImages(imageData || []);
+      // Reset visible images to first 6 when images change
+      setVisibleImageIndices(new Set([0, 1, 2, 3, 4, 5]));
+
+      // Fetch contributors count (includes owner)
+      const { count: contribCount, error: contribError } = await supabase
+        .from('roll_contributors')
+        .select('*', { count: 'exact', head: true })
+        .eq('roll_id', rollId);
+      if (contribError) throw contribError;
+      setContributorsCount(contribCount || 0);
+
+      // Check if current user is a contributor
+      if (user?.id && !isOwner) {
+        const { data: contributorData } = await supabase
+          .from('roll_contributors')
+          .select('id')
+          .eq('roll_id', rollId)
+          .eq('user_id', user.id)
+          .single();
+        setIsContributor(!!contributorData);
+      } else {
+        setIsContributor(false);
+      }
+    } catch (err) {
+      console.error('Error loading roll detail:', err);
+      setError(err.message || 'Failed to load roll');
+    } finally {
+      setLoading(false);
+    }
+  }, [rollId, roll]);
+
+  useEffect(() => {
     fetchData();
   }, [rollId, roll]);
+
+  // Refetch data when screen comes into focus (e.g., after taking a photo)
+  useFocusEffect(
+    useCallback(() => {
+      fetchData();
+    }, [fetchData])
+  );
 
   const handleTitleImagePicker = async () => {
     if (!isOwner) return;
@@ -236,6 +348,9 @@ const RollDetailScreen = () => {
 
   const renderImageItem = ({ item, index }) => {
     const isLastInRow = (index + 1) % GRID_COLUMNS === 0;
+    const shouldShowLocked = isLocked && !canViewImages; // Only show locked for non-owners before release
+    const shouldLoadImage = visibleImageIndices.has(index); // Only load visible images to prevent memory issues
+    
     return (
       <View
         style={[
@@ -247,18 +362,78 @@ const RollDetailScreen = () => {
           },
         ]}
       >
-        <Image
-          source={{ uri: item.image_url }}
-          style={styles.image}
-          resizeMode="cover"
-        />
-        {isLocked && (
-          <>
-            <View style={styles.lockOverlay} />
-            <View style={styles.lockIconWrapper}>
-              <Ionicons name="lock-closed" size={22} color={colors.background} />
-            </View>
-          </>
+        {shouldShowLocked ? (
+          // Show locked placeholder for non-owners before release date
+          <View style={styles.lockedImagePlaceholder}>
+            <Ionicons name="lock-closed" size={32} color={colors.textSecondary} />
+          </View>
+        ) : shouldLoadImage ? (
+          // Show image (owners/contributors can always see, others after release)
+          // Only load if in visible set to prevent memory pool violations
+          <View style={styles.imageContainer}>
+            <Image
+              source={{ 
+                uri: item.image_url,
+                // Limit image size to prevent memory issues
+                width: IMAGE_SIZE,
+                height: IMAGE_SIZE,
+              }}
+              style={[
+                styles.image,
+                isLocked && styles.lockedImage // Blur/lock overlay for owners before release
+              ]}
+              resizeMethod="resize" // Use resize instead of scale
+              resizeMode="cover"
+              onError={(error) => {
+                const errorDetails = error.nativeEvent || error;
+                console.error('❌ Image load error for roll image:', {
+                  imageId: item.id,
+                  imageUrl: item.image_url,
+                  error: errorDetails?.error || errorDetails?.message || errorDetails,
+                });
+                // Remove from visible set on error to prevent retry loops
+                setVisibleImageIndices(prev => {
+                  const next = new Set(prev);
+                  next.delete(index);
+                  return next;
+                });
+              }}
+              onLoad={() => {
+                console.log('✅ Roll image loaded successfully:', item.id);
+                // Progressive loading: Load next batch after successful load
+                // Only load next image when current one is the last visible
+                const visibleArray = Array.from(visibleImageIndices);
+                if (visibleArray.length > 0) {
+                  const maxVisible = Math.max(...visibleArray);
+                  if (index === maxVisible && index < images.length - 1) {
+                    // Add next 3 images (one row) after a short delay to prevent memory spikes
+                    setTimeout(() => {
+                      setVisibleImageIndices(prev => {
+                        const next = new Set(prev);
+                        // Add next 3 images (next row) - load one row at a time
+                        const nextBatchSize = Math.min(3, images.length - index - 1);
+                        for (let i = 1; i <= nextBatchSize; i++) {
+                          next.add(index + i);
+                        }
+                        return next;
+                      });
+                    }, 500); // 500ms delay between batches
+                  }
+                }
+              }}
+            />
+            {isLocked && canViewImages && (
+              // Lock overlay for owners/contributors before release
+              <View style={styles.lockOverlay}>
+                <Ionicons name="lock-closed" size={24} color={colors.background} />
+              </View>
+            )}
+          </View>
+        ) : (
+          // Show placeholder for images not yet loaded (progressive loading)
+          <View style={styles.lockedImagePlaceholder}>
+            <ActivityIndicator size="small" color={colors.textSecondary} />
+          </View>
         )}
       </View>
     );
@@ -316,147 +491,151 @@ const RollDetailScreen = () => {
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
       <Header />
       <ScrollView contentContainerStyle={styles.content}>
-        {/* Title Image */}
-        {roll?.title_image_url ? (
+        {/* Title Image - from roll-title-images bucket (public) */}
+        {titleImageUrl ? (
           <View style={styles.titleImageContainer}>
             <Image 
-              source={{ uri: roll.title_image_url }} 
+              source={{ uri: titleImageUrl }}
               style={styles.titleImage}
               resizeMode="cover"
               onError={(error) => {
-                console.error('Title image load error:', error.nativeEvent.error);
-                console.log('Attempted URL:', roll.title_image_url);
+                console.error('Title image load error:', error.nativeEvent?.error || error);
+                console.log('Attempted URL:', titleImageUrl);
               }}
               onLoad={() => {
-                console.log('✅ Title image loaded successfully:', roll.title_image_url);
+                console.log('✅ Title image loaded successfully');
               }}
             />
-            {isOwner && (
-              <TouchableOpacity
-                style={styles.editTitleImageButton}
-                onPress={handleTitleImagePicker}
-                disabled={uploadingTitleImage}
-              >
-                {uploadingTitleImage ? (
-                  <ActivityIndicator size="small" color={colors.background} />
-                ) : (
-                  <Ionicons name="camera" size={20} color={colors.background} />
-                )}
-              </TouchableOpacity>
-            )}
-          </View>
-        ) : isOwner ? (
-          <TouchableOpacity
-            style={styles.addTitleImageButton}
-            onPress={handleTitleImagePicker}
-            disabled={uploadingTitleImage}
-          >
-            {uploadingTitleImage ? (
-              <ActivityIndicator size="small" color={colors.textSecondary} />
-            ) : (
-              <>
-                <Ionicons name="image-outline" size={32} color={colors.textSecondary} />
-                <Text style={styles.addTitleImageText}>Add Title Image</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        ) : null}
-
-        <View style={styles.card}>
-          <View style={styles.titleRow}>
-            <Text style={styles.title} numberOfLines={2} ellipsizeMode="tail">
-              {roll.title}
-            </Text>
-            {roll.is_public && (
-              <View style={styles.publicBadge}>
-                <Ionicons name="globe" size={14} color={colors.primary} />
-                <Text style={styles.publicBadgeText}>Public</Text>
-              </View>
-            )}
-          </View>
-          {roll.description ? (
-            <Text style={styles.description} numberOfLines={4} ellipsizeMode="tail">
-              {roll.description}
-            </Text>
-          ) : null}
-
-          <View style={styles.metaRow}>
-            <View style={styles.metaPill}>
-              <Ionicons name="pulse" size={20} color={colors.primary} />
-              <Text style={styles.metaValue} numberOfLines={1}>
-                {roll.status}
-              </Text>
-            </View>
-            <View style={styles.metaPill}>
-              <Ionicons name="images" size={20} color={colors.primary} />
-              <Text style={styles.metaValue} numberOfLines={1}>
-                {images.length}
-              </Text>
-            </View>
-            <View style={styles.metaPill}>
-              <Ionicons name="people" size={20} color={colors.primary} />
-              <Text style={styles.metaValue} numberOfLines={1}>
-                {contributorsCount}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.datesRow}>
-            <View style={styles.dateItem}>
-              <View style={styles.dateHeader}>
-                <Ionicons name="calendar-outline" size={16} color={colors.textSecondary} />
-                <Text style={styles.metaLabel}>Submission deadline</Text>
-              </View>
-              <Text style={styles.dateValue}>{submissionDate}</Text>
-            </View>
-            <View style={styles.dateItem}>
-              <View style={styles.dateHeader}>
-                <Ionicons name="film-outline" size={16} color={colors.textSecondary} />
-                <Text style={styles.metaLabel}>Development date</Text>
-              </View>
-              <Text style={styles.dateValue}>{releaseDate}</Text>
-            </View>
-          </View>
-
-          {/* Public/Private Toggle (Owner Only) */}
           {isOwner && (
-            <View style={styles.publicToggleContainer}>
-              <View style={styles.publicToggleRow}>
-                <View style={styles.publicToggleLabelContainer}>
-                  <Ionicons 
-                    name={roll.is_public ? 'globe' : 'lock-closed'} 
-                    size={20} 
-                    color={roll.is_public ? colors.primary : colors.textSecondary} 
-                  />
-                  <Text style={styles.publicToggleLabel}>
-                    {roll.is_public ? 'Public' : 'Private'}
-                  </Text>
-                </View>
-                <Switch
-                  value={roll.is_public || false}
-                  onValueChange={handleTogglePublic}
-                  disabled={updatingPublic}
-                  trackColor={{ false: colors.inputBorder, true: colors.primary + '80' }}
-                  thumbColor={roll.is_public ? colors.primary : colors.textSecondary}
-                />
-              </View>
-              <Text style={styles.publicToggleHelper}>
-                {roll.is_public 
-                  ? 'This roll will appear on your public profile after the release date'
-                  : 'This roll is private and only visible to contributors'}
-              </Text>
+            <TouchableOpacity
+              style={styles.editTitleImageButton}
+              onPress={handleTitleImagePicker}
+              disabled={uploadingTitleImage}
+            >
+              {uploadingTitleImage ? (
+                <ActivityIndicator size="small" color={colors.background} />
+              ) : (
+                <Ionicons name="camera" size={20} color={colors.background} />
+              )}
+            </TouchableOpacity>
+          )}
+        </View>
+      ) : isOwner ? (
+        <TouchableOpacity
+          style={styles.addTitleImageButton}
+          onPress={handleTitleImagePicker}
+          disabled={uploadingTitleImage}
+        >
+          {uploadingTitleImage ? (
+            <ActivityIndicator size="small" color={colors.textSecondary} />
+          ) : (
+            <>
+              <Ionicons name="image-outline" size={32} color={colors.textSecondary} />
+              <Text style={styles.addTitleImageText}>Add Title Image</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      ) : null}
+
+      <View style={styles.card}>
+        <View style={styles.titleRow}>
+          <Text style={styles.title} numberOfLines={2} ellipsizeMode="tail">
+            {roll.title}
+          </Text>
+          {roll.is_public && (
+            <View style={styles.publicBadge}>
+              <Ionicons name="globe" size={14} color={colors.primary} />
+              <Text style={styles.publicBadgeText}>Public</Text>
             </View>
           )}
         </View>
+        {roll.description ? (
+          <Text style={styles.description} numberOfLines={4} ellipsizeMode="tail">
+            {roll.description}
+          </Text>
+        ) : null}
 
-        <View style={styles.galleryHeader}>
-          <Text style={styles.galleryTitle}>Photos</Text>
-          {isLocked && (
-            <View style={styles.lockBadge}>
-              <Ionicons name="lock-closed" size={14} color={colors.textSecondary} />
-              <Text style={styles.lockBadgeText}>Locked until release</Text>
+        <View style={styles.metaRow}>
+          <View style={styles.metaPill}>
+            <Ionicons name="pulse" size={20} color={colors.primary} />
+            <Text style={styles.metaValue} numberOfLines={1}>
+              {roll.status}
+            </Text>
+          </View>
+          <View style={styles.metaPill}>
+            <Ionicons name="images" size={20} color={colors.primary} />
+            <Text style={styles.metaValue} numberOfLines={1}>
+              {images.length}
+            </Text>
+          </View>
+          <View style={styles.metaPill}>
+            <Ionicons name="people" size={20} color={colors.primary} />
+            <Text style={styles.metaValue} numberOfLines={1}>
+              {contributorsCount}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.datesRow}>
+          <View style={styles.dateItem}>
+            <View style={styles.dateHeader}>
+              <Ionicons name="calendar-outline" size={16} color={colors.textSecondary} />
+              <Text style={styles.metaLabel}>Submission deadline</Text>
             </View>
-          )}
+            <Text style={styles.dateValue}>{submissionDate}</Text>
+          </View>
+          <View style={styles.dateItem}>
+            <View style={styles.dateHeader}>
+              <Ionicons name="film-outline" size={16} color={colors.textSecondary} />
+              <Text style={styles.metaLabel}>Development date</Text>
+            </View>
+            <Text style={styles.dateValue}>{releaseDate}</Text>
+          </View>
+        </View>
+
+        {/* Public/Private Toggle (Owner Only) */}
+        {isOwner && (
+          <View style={styles.publicToggleContainer}>
+            <View style={styles.publicToggleRow}>
+              <View style={styles.publicToggleLabelContainer}>
+                <Ionicons 
+                  name={roll.is_public ? 'globe' : 'lock-closed'} 
+                  size={20} 
+                  color={roll.is_public ? colors.primary : colors.textSecondary} 
+                />
+                <Text style={styles.publicToggleLabel}>
+                  {roll.is_public ? 'Public' : 'Private'}
+                </Text>
+              </View>
+              <Switch
+                value={roll.is_public || false}
+                onValueChange={handleTogglePublic}
+                disabled={updatingPublic}
+                trackColor={{ false: colors.inputBorder, true: colors.primary + '80' }}
+                thumbColor={roll.is_public ? colors.primary : colors.textSecondary}
+              />
+            </View>
+            <Text style={styles.publicToggleHelper}>
+              {roll.is_public 
+                ? 'This roll will appear on your public profile after the release date'
+                : 'This roll is private and only visible to contributors'}
+            </Text>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.galleryHeader}>
+        <Text style={styles.galleryTitle}>Photos</Text>
+        {isLocked ? (
+          <View style={styles.lockBadge}>
+            <Ionicons name="lock-closed" size={14} color={colors.textSecondary} />
+            <Text style={styles.lockBadgeText}>
+              {images.length} {images.length === 1 ? 'photo' : 'photos'} locked until release
+            </Text>
+          </View>
+        ) : (
+          <Text style={styles.photoCountText}>{images.length} {images.length === 1 ? 'photo' : 'photos'}</Text>
+        )}
         </View>
 
         {images.length === 0 ? (
@@ -474,6 +653,12 @@ const RollDetailScreen = () => {
             columnWrapperStyle={styles.columnWrapper}
             scrollEnabled={false}
             contentContainerStyle={styles.grid}
+            // Aggressive memory optimization for large images
+            removeClippedSubviews={true}
+            maxToRenderPerBatch={3} // Only render 3 at a time
+            updateCellsBatchingPeriod={200}
+            initialNumToRender={6} // Start with 6
+            windowSize={2} // Very small window
           />
         )}
       </ScrollView>
@@ -718,6 +903,11 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontWeight: '500',
   },
+  photoCountText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    fontWeight: '500',
+  },
   grid: {
     paddingBottom: 12,
   },
@@ -731,9 +921,33 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  imageContainer: {
+    width: '100%',
+    height: '100%',
+    position: 'relative',
+  },
   image: {
     width: '100%',
     height: '100%',
+  },
+  lockedImage: {
+    opacity: 0.5,
+  },
+  lockOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  lockedImagePlaceholder: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: colors.inputBackground,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: colors.inputBorder,
+    borderStyle: 'dashed',
   },
   lockOverlay: {
     ...StyleSheet.absoluteFillObject,

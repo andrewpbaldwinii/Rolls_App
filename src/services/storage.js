@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase';
+import ImageResizer from 'react-native-image-resizer';
 
 /**
  * Upload an image to Supabase Storage for a Roll
@@ -39,6 +40,42 @@ export const uploadRollImage = async (rollId, imagePath, base64Data = null) => {
     console.log('📁 Expected format: {rollId}/filename.jpg');
 
     let uint8Array;
+    let imageToProcess = imagePath;
+
+    // Resize/compress image before upload to reduce memory usage and file size
+    try {
+      console.log('🔄 Resizing image to reduce memory usage...');
+      // Remove file:// prefix if present for ImageResizer
+      let cleanPath = imagePath;
+      if (cleanPath.startsWith('file://')) {
+        cleanPath = cleanPath.replace('file://', '');
+      }
+      
+      // Resize image to max 1200px (maintains quality while reducing size)
+      const resizedImage = await ImageResizer.createResizedImage(
+        cleanPath,
+        1200, // maxWidth
+        1200, // maxHeight
+        'JPEG',
+        80,   // quality (80% - good balance)
+        0,    // rotation
+        undefined, // outputPath (use temp)
+        false, // keepMeta
+        { mode: 'contain', onlyScaleDown: true }
+      );
+      
+      imageToProcess = resizedImage.uri;
+      console.log('✅ Image resized:', {
+        original: imagePath,
+        resized: resizedImage.uri,
+        width: resizedImage.width,
+        height: resizedImage.height,
+        size: resizedImage.size
+      });
+    } catch (resizeError) {
+      console.warn('⚠️ Image resize failed, using original:', resizeError);
+      // Continue with original image if resize fails
+    }
 
     // If base64 data is provided, use it directly (avoids content:// URI security issues)
     if (base64Data && base64Data.length > 0) {
@@ -63,13 +100,13 @@ export const uploadRollImage = async (rollId, imagePath, base64Data = null) => {
         throw new Error('Failed to process image data. Please try selecting the image again.');
       }
     } else {
-      console.log('⚠️ No base64 data provided, will try to read from URI');
+      console.log('📖 Reading resized image file...');
       // Handle file path - remove file:// prefix if present, or add it if missing
-      let fileUri = imagePath;
-      if (!imagePath.startsWith('file://') && !imagePath.startsWith('content://')) {
-        fileUri = `file://${imagePath}`;
-      } else if (imagePath.startsWith('file://')) {
-        fileUri = imagePath;
+      let fileUri = imageToProcess;
+      if (!imageToProcess.startsWith('file://') && !imageToProcess.startsWith('content://')) {
+        fileUri = `file://${imageToProcess}`;
+      } else if (imageToProcess.startsWith('file://')) {
+        fileUri = imageToProcess;
       }
 
       console.log('Reading file from:', fileUri);
@@ -88,7 +125,7 @@ export const uploadRollImage = async (rollId, imagePath, base64Data = null) => {
       const arrayBuffer = await response.arrayBuffer();
       uint8Array = new Uint8Array(arrayBuffer);
       
-      console.log('File converted successfully, size:', uint8Array.length, 'bytes');
+      console.log('✅ File converted successfully, size:', uint8Array.length, 'bytes');
     }
 
     console.log('📤 Uploading to Supabase Storage...', { 
@@ -180,11 +217,48 @@ export const uploadRollTitleImage = async (rollId, imagePath, base64Data = null)
     }
 
     // Create a unique filename
+    // Using simpler path format: {rollId}/{filename}.jpg (no /title/ subdirectory)
     const timestamp = Date.now();
     const fileName = `title_${timestamp}.jpg`;
-    const storagePath = `${rollId}/title/${fileName}`;
+    const storagePath = `${rollId}/${fileName}`;
 
     let uint8Array;
+    let imageToProcess = imagePath;
+
+    // Resize/compress title image before upload to reduce memory usage
+    try {
+      console.log('🔄 Resizing title image to reduce memory usage...');
+      // Remove file:// prefix if present for ImageResizer
+      let cleanPath = imagePath;
+      if (cleanPath.startsWith('file://')) {
+        cleanPath = cleanPath.replace('file://', '');
+      }
+      
+      // Resize title image to max 1200px (maintains quality while reducing size)
+      const resizedImage = await ImageResizer.createResizedImage(
+        cleanPath,
+        1200, // maxWidth
+        1200, // maxHeight
+        'JPEG',
+        80,   // quality (80% - good balance)
+        0,    // rotation
+        undefined, // outputPath (use temp)
+        false, // keepMeta
+        { mode: 'contain', onlyScaleDown: true }
+      );
+      
+      imageToProcess = resizedImage.uri;
+      console.log('✅ Title image resized:', {
+        original: imagePath,
+        resized: resizedImage.uri,
+        width: resizedImage.width,
+        height: resizedImage.height,
+        size: resizedImage.size
+      });
+    } catch (resizeError) {
+      console.warn('⚠️ Title image resize failed, using original:', resizeError);
+      // Continue with original image if resize fails
+    }
 
     // If base64 data is provided, use it directly
     if (base64Data && base64Data.length > 0) {
@@ -206,10 +280,10 @@ export const uploadRollTitleImage = async (rollId, imagePath, base64Data = null)
         throw new Error('Failed to process image data. Please try selecting the image again.');
       }
     } else {
-      // Fallback to reading from file URI
-      let fileUri = imagePath;
-      if (!imagePath.startsWith('file://') && !imagePath.startsWith('content://')) {
-        fileUri = `file://${imagePath}`;
+      // Fallback to reading from file URI (use resized image if available)
+      let fileUri = imageToProcess;
+      if (!imageToProcess.startsWith('file://') && !imageToProcess.startsWith('content://')) {
+        fileUri = `file://${imageToProcess}`;
       }
 
       const response = await fetch(fileUri);
@@ -221,10 +295,10 @@ export const uploadRollTitleImage = async (rollId, imagePath, base64Data = null)
       uint8Array = new Uint8Array(arrayBuffer);
     }
 
-    // Upload to Supabase Storage
-    console.log('📤 Uploading title image to path:', storagePath);
+    // Upload to Supabase Storage - using separate roll-title-images bucket
+    console.log('📤 Uploading title image to bucket: roll-title-images, path:', storagePath);
     const { data, error } = await supabase.storage
-      .from('roll-images')
+      .from('roll-title-images')
       .upload(storagePath, uint8Array, {
         contentType: 'image/jpeg',
         upsert: true, // Allow overwriting existing title images
@@ -232,6 +306,22 @@ export const uploadRollTitleImage = async (rollId, imagePath, base64Data = null)
 
     if (error) {
       console.error('❌ Title image upload error:', error);
+      console.error('Error details:', {
+        bucket: 'roll-title-images',
+        path: storagePath,
+        rollId: rollId,
+        errorCode: error.error || error.statusCode,
+        errorMessage: error.message,
+      });
+      
+      // Provide helpful error message
+      if (error.message?.includes('Bucket not found') || error.error === 'Bucket not found') {
+        throw new Error(
+          'Title images bucket not found. Please create the "roll-title-images" bucket in Supabase Storage.\n\n' +
+          'See CREATE_ROLL_TITLE_IMAGES_BUCKET.sql for setup instructions.'
+        );
+      }
+      
       throw new Error(`Failed to upload title image: ${error.message}`);
     }
 
@@ -241,11 +331,11 @@ export const uploadRollTitleImage = async (rollId, imagePath, base64Data = null)
 
     // Get public URL - use the path returned from upload (should match storagePath)
     const { data: urlData } = supabase.storage
-      .from('roll-images')
+      .from('roll-title-images')
       .getPublicUrl(data.path);
 
     console.log('🔗 Generated public URL:', urlData.publicUrl);
-    console.log('🔗 URL path component:', urlData.publicUrl.split('/storage/v1/object/public/roll-images/')[1]);
+    console.log('🔗 URL path component:', urlData.publicUrl.split('/storage/v1/object/public/roll-title-images/')[1]);
 
     return urlData.publicUrl;
   } catch (error) {
@@ -282,13 +372,242 @@ export const upsertTitleImageAsRollImage = async (rollId, imageUrl, contributorI
 };
 
 /**
+ * Get a valid URL for a roll image (synchronous version)
+ * Handles public URLs that are already valid
+ * @param {string} imageUrl - Existing image URL
+ * @returns {string} Valid URL or original if already valid
+ */
+export const getRollImageUrl = (imageUrl) => {
+  if (!imageUrl) return null;
+  
+  // If it's already a valid URL (public or signed), return it
+  if (imageUrl.includes('/storage/v1/object/')) {
+    return imageUrl;
+  }
+  
+  // If it's a full URL, return it
+  if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+    return imageUrl;
+  }
+  
+  // Otherwise return as-is (will need async processing)
+  return imageUrl;
+};
+
+/**
+ * Get a valid URL for a roll image (async version)
+ * - Title images (roll-title-images bucket, public): Use public URLs
+ * - Roll images (roll-images bucket, private): Generate signed URLs
+ * @param {string} imageUrl - Existing image URL or storage path
+ * @param {string} bucketType - Optional: 'title' for title images, 'roll' for roll images
+ * @returns {Promise<string>} Valid URL (public or signed)
+ */
+export const getRollImageUrlAsync = async (imageUrl, bucketType = null) => {
+  if (!imageUrl) return null;
+  
+  // Determine bucket type if not explicitly provided
+  const isTitleImage = bucketType === 'title' || 
+                       imageUrl.includes('roll-title-images') || 
+                       imageUrl.includes('/title/');
+  
+  // Title images (roll-title-images bucket - always public)
+  if (isTitleImage) {
+    // Title images are in public bucket, use public URLs
+    if (imageUrl.includes('/storage/v1/object/public/roll-title-images/')) {
+      return imageUrl; // Already a valid public URL
+    }
+    
+    // Extract path and generate public URL
+    let path = null;
+    let bucket = 'roll-title-images';
+    
+    if (imageUrl.includes('/storage/v1/object/public/roll-title-images/')) {
+      path = imageUrl.split('/storage/v1/object/public/roll-title-images/')[1]?.split('?')[0];
+    } else if (imageUrl.includes('roll-title-images/')) {
+      path = imageUrl.split('roll-title-images/')[1]?.split('?')[0];
+    } else if (imageUrl.includes('/title/')) {
+      // Old format - in roll-images bucket with /title/ path
+      // These are in the private roll-images bucket, so we need signed URLs
+      const match = imageUrl.match(/roll-images\/([^/]+)\/title\/(.+?)(\?|$)/);
+      if (match) {
+        const rollId = match[1];
+        const filename = match[2];
+        // Full path in old format: {rollId}/title/{filename}
+        const oldPath = `${rollId}/title/${filename}`;
+        console.log('🔄 Old title image format detected in roll-images bucket:', {
+          oldPath: imageUrl.substring(0, 100),
+          path: oldPath
+        });
+        
+        // Try to generate signed URL from roll-images bucket (private)
+        try {
+          const cleanPath = oldPath.replace(/^\/+|\/+$/g, '');
+          const { data, error } = await supabase.storage
+            .from('roll-images')
+            .createSignedUrl(cleanPath, 3600);
+          
+          if (!error && data?.signedUrl) {
+            console.log('✅ Generated signed URL for old title image');
+            return data.signedUrl;
+          }
+        } catch (err) {
+          console.warn('⚠️ Failed to generate signed URL for old title image:', err);
+        }
+        
+        // Fallback: Try to migrate to roll-title-images bucket format
+        // New format: {rollId}/{filename} (no /title/ subdirectory)
+        path = `${rollId}/${filename}`;
+        bucket = 'roll-title-images';
+        console.log('🔄 Attempting to use new bucket format:', { bucket, path });
+      } else {
+        // Try to extract from public URL format
+        const publicMatch = imageUrl.match(/\/storage\/v1\/object\/public\/roll-images\/([^/]+)\/title\/(.+?)(\?|$)/);
+        if (publicMatch) {
+          const rollId = publicMatch[1];
+          const filename = publicMatch[2];
+          // Try signed URL first (since roll-images is private)
+          const oldPath = `${rollId}/title/${filename}`;
+          try {
+            const { data, error } = await supabase.storage
+              .from('roll-images')
+              .createSignedUrl(oldPath.replace(/^\/+|\/+$/g, ''), 3600);
+            
+            if (!error && data?.signedUrl) {
+              console.log('✅ Generated signed URL for old title image (from public URL)');
+              return data.signedUrl;
+            }
+          } catch (err) {
+            console.warn('⚠️ Failed to generate signed URL:', err);
+          }
+          
+          // Fallback to new bucket format
+          path = `${rollId}/${filename}`;
+          bucket = 'roll-title-images';
+        }
+      }
+    }
+    
+    if (path) {
+      path = path.replace(/^\/+|\/+$/g, '');
+      console.log('🔗 Generating public URL for title image:', { bucket, path });
+      const { data } = supabase.storage
+        .from(bucket)
+        .getPublicUrl(path);
+      if (data?.publicUrl) {
+        console.log('✅ Title image URL generated:', data.publicUrl.substring(0, 100));
+        return data.publicUrl;
+      } else {
+        console.warn('⚠️ Failed to generate public URL for title image');
+      }
+    }
+  }
+  
+  // Roll images (roll-images bucket - private, needs signed URLs)
+  // Only process if bucketType is 'roll' or not explicitly 'title'
+  if (bucketType === 'roll' || (!bucketType && !isTitleImage)) {
+    // If it's already a signed URL, check if it's still valid
+    if (imageUrl.includes('/storage/v1/object/sign/roll-images/')) {
+      // Extract path and regenerate to ensure it's not expired
+      const signMatch = imageUrl.match(/\/storage\/v1\/object\/sign\/roll-images\/(.+?)(\?|$)/);
+      if (signMatch) {
+        const path = decodeURIComponent(signMatch[1]);
+        // Regenerate signed URL
+        const { data, error } = await supabase.storage
+          .from('roll-images')
+          .createSignedUrl(path, 3600); // 1 hour expiry
+        
+        if (!error && data?.signedUrl) {
+          return data.signedUrl;
+        }
+      }
+    }
+    
+    // If it's a public URL for roll-images, we need to convert it to signed URL
+    // (because roll-images bucket is private)
+    if (imageUrl.includes('/storage/v1/object/public/roll-images/')) {
+      // Extract path and generate signed URL instead
+      const path = imageUrl.split('/storage/v1/object/public/roll-images/')[1]?.split('?')[0];
+      if (path) {
+        const cleanPath = path.replace(/^\/+|\/+$/g, '');
+        const { data, error } = await supabase.storage
+          .from('roll-images')
+          .createSignedUrl(cleanPath, 3600);
+        
+        if (!error && data?.signedUrl) {
+          return data.signedUrl;
+        }
+      }
+    }
+    
+    // Fallback: Try to extract path from URL if we haven't handled it yet
+    let path = null;
+    
+    // Check if it's a roll image (roll-images bucket - private, needs signed URL)
+    if (imageUrl.includes('roll-images/') && !imageUrl.includes('/title/')) {
+      if (imageUrl.includes('/storage/v1/object/public/roll-images/')) {
+        path = imageUrl.split('/storage/v1/object/public/roll-images/')[1]?.split('?')[0];
+      } else if (imageUrl.includes('roll-images/')) {
+        path = imageUrl.split('roll-images/')[1]?.split('?')[0];
+      }
+      
+      if (path) {
+        path = path.replace(/^\/+|\/+$/g, '');
+        console.log('🔗 Generating signed URL for roll image:', { path, originalUrl: imageUrl?.substring(0, 100) });
+        
+        try {
+          const { data, error } = await supabase.storage
+            .from('roll-images')
+            .createSignedUrl(path, 3600); // 1 hour expiry
+          
+          if (!error && data?.signedUrl) {
+            console.log('✅ Generated signed URL successfully for roll image');
+            return data.signedUrl;
+          }
+          
+          console.error('❌ Signed URL generation failed for roll image:', {
+            error: error?.message || error,
+            errorCode: error?.statusCode,
+            path
+          });
+        } catch (err) {
+          console.error('❌ Error generating signed URL for roll image:', err);
+        }
+      }
+    }
+  }
+  
+  // If we couldn't parse it, return original
+  console.warn('⚠️ Could not extract path/bucket from image URL:', imageUrl);
+  return imageUrl;
+};
+
+/**
  * Delete an image from Supabase Storage
+ * Handles both roll images and title images
  * @param {string} imageUrl - Full URL or path to the image
  */
 export const deleteRollImage = async (imageUrl) => {
   try {
-    // Extract path from URL
-    const path = imageUrl.split('/storage/v1/object/public/roll-images/')[1];
+    // Check if it's a title image (roll-title-images bucket)
+    if (imageUrl.includes('roll-title-images')) {
+      const path = imageUrl.split('/storage/v1/object/public/roll-title-images/')[1] ||
+                   imageUrl.split('/storage/v1/object/sign/roll-title-images/')[1];
+      
+      if (!path) {
+        throw new Error('Invalid title image URL');
+      }
+
+      const { error } = await supabase.storage
+        .from('roll-title-images')
+        .remove([path]);
+
+      if (error) throw error;
+      return;
+    }
+    
+    // Default to roll-images bucket for roll images
+    const path = imageUrl.split('/storage/v1/object/public/roll-images/')[1] ||
+                 imageUrl.split('/storage/v1/object/sign/roll-images/')[1];
     
     if (!path) {
       throw new Error('Invalid image URL');

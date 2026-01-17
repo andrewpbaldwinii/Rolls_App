@@ -1,7 +1,7 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
-import { View, StyleSheet, Platform } from 'react-native';
+import { View, StyleSheet, Platform, Image } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import HomeScreen from '../screens/HomeScreen';
 import NotificationsScreen from '../screens/NotificationsScreen';
@@ -14,6 +14,7 @@ import EditProfileScreen from '../screens/EditProfileScreen';
 import CameraButton from '../components/CameraButton';
 import NotificationBadge from '../components/NotificationBadge';
 import colors from '../constants/colors';
+import appIcon from '../assets/images/app_icon.png';
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
@@ -83,15 +84,26 @@ const TabNavigator = () => {
         component={RollsScreen}
         options={{
           tabBarLabel: 'Rolls',
-          tabBarIcon: ({ focused, color, size }) => (
-            <View style={styles.iconContainer}>
-              <Ionicons 
-                name={focused ? 'grid' : 'grid-outline'} 
-                size={size || 24} 
-                color={color || (focused ? colors.navActive : colors.navInactive)} 
-              />
-            </View>
-          ),
+          tabBarIcon: ({ focused, color, size }) => {
+            const iconSize = (size || 24) * 2; // 2x the normal size
+            return (
+              <View style={[styles.iconContainer, styles.rollsIconContainer]}>
+                <Image 
+                  source={appIcon}
+                  style={[
+                    styles.appIcon,
+                    {
+                      width: iconSize,
+                      height: iconSize,
+                      opacity: focused ? 1 : 0.7,
+                      tintColor: color || (focused ? colors.navActive : colors.navInactive),
+                    }
+                  ]}
+                  resizeMode="contain"
+                />
+              </View>
+            );
+          },
         }}
       />
       <Tab.Screen
@@ -146,6 +158,14 @@ const styles = StyleSheet.create({
     top: -15,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  appIcon: {
+    width: 24,
+    height: 24,
+  },
+  rollsIconContainer: {
+    width: 48,
+    height: 48,
   },
 });
 

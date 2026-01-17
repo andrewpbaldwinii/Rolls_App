@@ -6,16 +6,12 @@ import {
   StyleSheet,
   Alert,
   ActivityIndicator,
-  Platform,
   StatusBar,
-  AppState,
-  PermissionsAndroid,
 } from 'react-native';
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
-import { launchImageLibrary } from 'react-native-image-picker';
 import { useRolls } from '../contexts/RollsContext';
 import { uploadRollImage } from '../services/storage';
 import colors from '../constants/colors';
@@ -26,12 +22,17 @@ const CameraScreen = () => {
   const isMountedRef = useRef(true);
   const { hasPermission, requestPermission } = useCameraPermission();
   const { addImageToRoll, getOwnedRolls, getContributedRolls, fetchRolls } = useRolls();
-  const device = useCameraDevice('back');
+  const backDevice = useCameraDevice('back');
+  const frontDevice = useCameraDevice('front');
+  const [cameraType, setCameraType] = useState('back'); // 'back' or 'front'
   const [isActive, setIsActive] = useState(true);
   const [isCapturing, setIsCapturing] = useState(false);
   const [selectedRoll, setSelectedRoll] = useState(null);
   const [showRollSelector, setShowRollSelector] = useState(false);
   const [uploading, setUploading] = useState(false);
+  
+  // Select the active device based on cameraType
+  const device = cameraType === 'front' ? frontDevice : backDevice;
 
   const ownedRolls = getOwnedRolls();
   const contributedRolls = getContributedRolls();
@@ -115,6 +116,7 @@ const CameraScreen = () => {
       const photo = await cameraRef.current.takePhoto({
         flash: 'off',
         qualityPrioritization: 'speed',
+        quality: 70, // Reduce quality to reduce file size and memory usage
       });
       
       // Show confirmation dialog before uploading
@@ -140,7 +142,7 @@ const CameraScreen = () => {
     }
   };
 
-  const handlePhotoUpload = async (imagePath, base64Data = null) => {
+  const handlePhotoUpload = async (imagePath) => {
     try {
       setUploading(true);
       
@@ -156,13 +158,12 @@ const CameraScreen = () => {
         rollId: selectedRoll.id, 
         rollTitle: selectedRoll.title,
         rollIdType: typeof selectedRoll.id,
-        imagePath: imagePath?.substring(0, 50) + '...', 
-        hasBase64: !!base64Data 
+        imagePath: imagePath?.substring(0, 50) + '...'
       });
       
       // Upload image to Supabase Storage
       console.log('Step 1: Uploading image to storage...');
-      const imageUrl = await uploadRollImage(selectedRoll.id, imagePath, base64Data);
+      const imageUrl = await uploadRollImage(selectedRoll.id, imagePath);
       console.log('✅ Step 1 complete: Image uploaded, URL:', imageUrl);
       
       if (!isMountedRef.current) return; // Component unmounted, don't continue
@@ -173,6 +174,9 @@ const CameraScreen = () => {
       console.log('Step 2 complete: Image added to roll');
       
       if (!isMountedRef.current) return; // Component unmounted, don't show alert
+      
+      // Refresh rolls to update image counts
+      await fetchRolls();
       
       // Always show success message
       Alert.alert(
@@ -226,106 +230,6 @@ const CameraScreen = () => {
     }
   };
 
-  const selectImageFromDevice = async () => {
-    // Check if a roll is selected
-    if (!selectedRoll) {
-      if (availableRolls.length === 0) {
-        Alert.alert(
-          'No Rolls Available',
-          'Please create a roll first before uploading photos.',
-          [{ text: 'OK' }]
-        );
-        return;
-      }
-      setShowRollSelector(true);
-      return;
-    }
-
-    // Request permissions for Android
-    if (Platform.OS === 'android') {
-      try {
-        const apiLevel = Platform.Version;
-        let permission;
-        
-        if (apiLevel >= 33) {
-          permission = PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES;
-        } else {
-          permission = PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE;
-        }
-
-        const granted = await PermissionsAndroid.request(permission);
-        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-          Alert.alert(
-            'Permission Required',
-            'Please grant photo access permission to select images from your device.',
-            [{ text: 'OK' }]
-          );
-          return;
-        }
-      } catch (err) {
-        console.error('Permission error:', err);
-        Alert.alert('Error', 'Failed to request photo permission');
-        return;
-      }
-    }
-
-    const options = {
-      mediaType: 'photo',
-      quality: 0.8,
-      maxWidth: 2048,
-      maxHeight: 2048,
-      selectionLimit: 1,
-      includeBase64: true, // Get base64 data to avoid content:// URI issues on Android
-    };
-
-    try {
-      launchImageLibrary(options, async (response) => {
-        if (response.didCancel) {
-          return;
-        }
-
-        if (response.errorCode) {
-          console.error('Image picker error:', response.errorCode, response.errorMessage);
-          let errorMessage = 'Failed to select image';
-          if (response.errorCode === 'permission') {
-            errorMessage = 'Permission to access photos was denied. Please enable it in your device settings.';
-          } else if (response.errorMessage) {
-            errorMessage = response.errorMessage;
-          }
-          Alert.alert('Error', errorMessage);
-          return;
-        }
-
-        if (response.assets && response.assets[0]) {
-          const selectedImage = response.assets[0];
-          console.log('Image selected from device:', {
-            uri: selectedImage.uri?.substring(0, 50) + '...',
-            hasBase64: !!selectedImage.base64,
-            type: selectedImage.type,
-          });
-
-          // Show confirmation dialog
-          Alert.alert(
-            'Confirm Upload',
-            `Add this photo to "${selectedRoll.title}"?`,
-            [
-              {
-                text: 'Cancel',
-                style: 'cancel',
-              },
-              {
-                text: 'Upload',
-                onPress: () => handlePhotoUpload(selectedImage.uri, selectedImage.base64),
-              },
-            ]
-          );
-        }
-      });
-    } catch (error) {
-      console.error('Error launching image library:', error);
-      Alert.alert('Error', 'Failed to open photo picker. Please try again.');
-    }
-  };
 
   if (!hasPermission) {
     return (
@@ -454,19 +358,29 @@ const CameraScreen = () => {
         )}
       </View>
 
+      {/* Camera Toggle Button - Top Right */}
+      {frontDevice && backDevice && (
+        <View style={[styles.cameraToggleContainer, { top: insets.top + 16, right: 16 }]}>
+          <TouchableOpacity
+            style={styles.cameraToggleButton}
+            onPress={() => {
+              setCameraType(prev => prev === 'back' ? 'front' : 'back');
+            }}
+            activeOpacity={0.8}
+            disabled={isCapturing || uploading}
+          >
+            <Ionicons 
+              name={cameraType === 'back' ? 'camera-reverse' : 'camera-reverse-outline'} 
+              size={24} 
+              color={colors.buttonText} 
+            />
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Capture Button Overlay */}
       <View style={[styles.overlay, { paddingBottom: insets.bottom + 20 }]}>
-        {/* Image Picker Button */}
-        <TouchableOpacity
-          style={[styles.imagePickerButton, (isCapturing || uploading) && styles.imagePickerButtonDisabled]}
-          onPress={selectImageFromDevice}
-          disabled={isCapturing || uploading}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="images-outline" size={28} color={colors.buttonText} />
-        </TouchableOpacity>
-
-        {/* Capture Button */}
+        {/* Capture Button - Centered */}
         <TouchableOpacity
           style={[styles.captureButton, (isCapturing || uploading) && styles.captureButtonActive]}
           onPress={takePhoto}
@@ -475,9 +389,6 @@ const CameraScreen = () => {
         >
           <View style={styles.captureButtonInner} />
         </TouchableOpacity>
-        
-        {/* Spacer for symmetry */}
-        <View style={styles.imagePickerButton} />
         
         {(isCapturing || uploading) && (
           <ActivityIndicator size="small" color={colors.buttonText} style={styles.capturingIndicator} />
@@ -501,6 +412,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 40,
+    flexDirection: 'column',
+  },
+  cameraToggleContainer: {
+    position: 'absolute',
+    zIndex: 10,
+  },
+  cameraToggleButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: colors.buttonPrimary,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
   },
   rollSelectorContainer: {
     position: 'absolute',
@@ -628,27 +562,6 @@ const styles = StyleSheet.create({
     height: 64,
     borderRadius: 32,
     backgroundColor: colors.buttonPrimary,
-  },
-  imagePickerButton: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: colors.background,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: colors.buttonPrimary,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  imagePickerButtonDisabled: {
-    opacity: 0.5,
   },
   capturingIndicator: {
     marginTop: 16,

@@ -23,13 +23,19 @@ export const RollsProvider = ({ children }) => {
       setError(null);
 
       // Fetch rolls where user is creator/owner
-      const { data: ownedRolls, error: ownedError } = await supabase
+      // Exclude "Profile Photos" rolls - these are system rolls that shouldn't appear
+      const { data: ownedRollsData, error: ownedError } = await supabase
         .from('rolls')
         .select('*')
         .eq('creator_id', user.id)
         .order('created_at', { ascending: false });
 
       if (ownedError) throw ownedError;
+
+      // Filter out "Profile Photos" rolls (case-insensitive)
+      const ownedRolls = (ownedRollsData || []).filter(
+        roll => roll.title?.toLowerCase() !== 'profile photos'
+      );
 
       // Fetch rolls where user is contributor (only if roll_contributors table exists)
       let contributedRolls = [];
@@ -52,9 +58,11 @@ export const RollsProvider = ({ children }) => {
           }
         } else if (contributorData) {
           // Extract roll objects from contributorData
+          // Filter out "Profile Photos" rolls (case-insensitive)
           contributedRolls = contributorData
             .map(item => item.rolls)
-            .filter(Boolean) || [];
+            .filter(Boolean)
+            .filter(roll => roll.title?.toLowerCase() !== 'profile photos') || [];
         }
       } catch (contribErr) {
         // If table doesn't exist, just log and continue with owned rolls only
@@ -67,12 +75,18 @@ export const RollsProvider = ({ children }) => {
       }
 
       // Merge and deduplicate
+      // Note: ownedRolls and contributedRolls are already filtered to exclude "Profile Photos"
       const allRolls = [...(ownedRolls || []), ...contributedRolls];
       const uniqueRolls = Array.from(
         new Map(allRolls.map(roll => [roll.id, roll])).values()
       );
 
-      setRolls(uniqueRolls);
+      // Final safety check: filter out any "Profile Photos" rolls that might have slipped through
+      const filteredRolls = uniqueRolls.filter(
+        roll => roll.title?.toLowerCase() !== 'profile photos'
+      );
+
+      setRolls(filteredRolls);
     } catch (err) {
       console.error('Error fetching rolls:', err);
       // Provide more detailed error information
@@ -327,7 +341,7 @@ export const RollsProvider = ({ children }) => {
     fetchRolls();
   }, [fetchRolls]);
 
-  // Subscribe to real-time updates
+  // Subscribe to real-time updates for rolls
   useEffect(() => {
     if (!user) return;
 
@@ -342,6 +356,34 @@ export const RollsProvider = ({ children }) => {
           filter: `creator_id=eq.${user.id}`,
         },
         () => {
+          fetchRolls();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [user, fetchRolls]);
+
+  // Subscribe to real-time updates for roll_images to refresh image counts
+  // This will trigger when images are added/removed from any roll
+  useEffect(() => {
+    if (!user) return;
+
+    const subscription = supabase
+      .channel('roll_images_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'roll_images',
+        },
+        (payload) => {
+          // Refresh rolls to update image counts
+          // The fetchImageCounts in RollsScreen will pick up the changes
+          console.log('Roll image changed, refreshing rolls...', payload);
           fetchRolls();
         }
       )

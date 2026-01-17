@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { launchImageLibrary } from 'react-native-image-picker';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useRolls } from '../contexts/RollsContext';
@@ -31,7 +31,7 @@ const { width } = Dimensions.get('window');
 const RollsScreen = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
-  const { rolls, loading, error, createRoll, updateRoll, fetchRolls, getOwnedRolls, getContributedRolls } = useRolls();
+  const { rolls, loading, error, createRoll, updateRoll, deleteRoll, fetchRolls, getOwnedRolls, getContributedRolls } = useRolls();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingRoll, setEditingRoll] = useState(null);
@@ -49,25 +49,40 @@ const RollsScreen = () => {
   const [titleImageBase64, setTitleImageBase64] = useState(null);
   const [uploadingTitleImage, setUploadingTitleImage] = useState(false);
 
-  const ownedRolls = getOwnedRolls();
-  const contributedRolls = getContributedRolls();
-  const activeRolls = rolls.filter(roll => roll.status === 'active');
-  const archivedRolls = rolls.filter(roll => roll.status === 'archived');
+  const ownedRolls = getOwnedRolls().filter(
+    roll => roll.title?.toLowerCase() !== 'profile photos'
+  );
+  const contributedRolls = getContributedRolls().filter(
+    roll => roll.title?.toLowerCase() !== 'profile photos'
+  );
+  const activeRolls = rolls.filter(
+    roll => roll.status === 'active' && roll.title?.toLowerCase() !== 'profile photos'
+  );
+  const archivedRolls = rolls.filter(
+    roll => roll.status === 'archived' && roll.title?.toLowerCase() !== 'profile photos'
+  );
   const [imageCounts, setImageCounts] = useState({});
 
   // Fetch image counts for all rolls
-  const fetchImageCounts = async () => {
+  const fetchImageCounts = useCallback(async () => {
+    if (rolls.length === 0) return;
+    
     const counts = {};
     for (const roll of rolls) {
       try {
-        const { count, error } = await supabase
+        // Fetch all images first, then filter (more reliable with RLS)
+        const { data, error } = await supabase
           .from('roll_images')
-          .select('*', { count: 'exact', head: true })
-          .eq('roll_id', roll.id)
-          .neq('caption', '__title_image__'); // Exclude title images (they're separate)
+          .select('id, caption')
+          .eq('roll_id', roll.id);
         
-        if (!error) {
-          counts[roll.id] = count || 0;
+        if (!error && data) {
+          // Filter out title images manually
+          const filteredImages = data.filter(img => img.caption !== '__title_image__');
+          counts[roll.id] = filteredImages.length;
+        } else {
+          console.error(`Error fetching count for roll ${roll.id}:`, error);
+          counts[roll.id] = 0;
         }
       } catch (err) {
         console.error(`Error fetching count for roll ${roll.id}:`, err);
@@ -75,13 +90,18 @@ const RollsScreen = () => {
       }
     }
     setImageCounts(counts);
-  };
+  }, [rolls]);
 
   useEffect(() => {
-    if (rolls.length > 0) {
+    fetchImageCounts();
+  }, [fetchImageCounts]);
+
+  // Refetch image counts when screen comes into focus (e.g., after taking a photo)
+  useFocusEffect(
+    useCallback(() => {
       fetchImageCounts();
-    }
-  }, [rolls]);
+    }, [fetchImageCounts])
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -216,6 +236,38 @@ const RollsScreen = () => {
     }
   };
 
+  const handleDeleteRoll = (roll) => {
+    // Only allow deletion for owned rolls
+    const isOwned = ownedRolls.some(r => r.id === roll.id);
+    if (!isOwned) {
+      return;
+    }
+
+    Alert.alert(
+      'Delete Roll',
+      `Are you sure you want to delete "${roll.title}"? This will also delete all photos in this roll. This action cannot be undone.`,
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteRoll(roll.id);
+              Alert.alert('Success', 'Roll deleted successfully');
+            } catch (error) {
+              console.error('Error deleting roll:', error);
+              Alert.alert('Error', error.message || 'Failed to delete roll');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const handleEditRoll = (roll) => {
     setEditingRoll(roll);
     setRollName(roll.title);
@@ -294,6 +346,11 @@ const RollsScreen = () => {
         activeOpacity={0.7}
         onPress={() => {
           navigation.navigate('RollDetail', { rollId: roll.id, initialRoll: roll });
+        }}
+        onLongPress={() => {
+          if (isOwned) {
+            handleDeleteRoll(roll);
+          }
         }}
       >
         <View style={styles.rollCardHeader}>
