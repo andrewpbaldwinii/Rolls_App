@@ -11,6 +11,7 @@ import ProfileScreen from '../screens/ProfileScreen';
 import PublicProfileScreen from '../screens/PublicProfileScreen';
 import RollDetailScreen from '../screens/RollDetailScreen';
 import EditProfileScreen from '../screens/EditProfileScreen';
+import PhotoViewerScreen from '../screens/PhotoViewerScreen';
 import CameraButton from '../components/CameraButton';
 import NotificationBadge from '../components/NotificationBadge';
 import colors from '../constants/colors';
@@ -197,6 +198,14 @@ const MainNavigator = () => {
         component={EditProfileScreen}
         options={{
           presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="PhotoViewer"
+        component={PhotoViewerScreen}
+        options={{
+          headerShown: false,
+          presentation: 'fullScreenModal',
         }}
       />
     </Stack.Navigator>

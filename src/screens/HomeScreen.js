@@ -11,11 +11,27 @@ import {
   RefreshControl,
   Dimensions,
   Alert,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { getNewsfeedItems, NEWSFEED_ITEM_TYPES } from '../services/newsfeed';
+import { useAuth } from '../contexts/AuthContext';
+import {
+  likePhoto,
+  unlikePhoto,
+  hasUserLikedPhoto,
+  getPhotoLikeCount,
+  getPhotoCommentCount,
+  getPhotosLikeStatus,
+  addComment,
+  getPhotoComments,
+  PHOTO_TYPES,
+} from '../services/interactions';
 import colors from '../constants/colors';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -25,6 +41,7 @@ const IMAGE_HEIGHT = SCREEN_WIDTH; // Square images
 const HomeScreen = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
+  const { user } = useAuth();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -32,8 +49,66 @@ const HomeScreen = () => {
   const [hasMore, setHasMore] = useState(true);
   const [currentPage, setCurrentPage] = useState(0);
   const [error, setError] = useState(null);
+  // Track likes and comments for each item
+  const [itemInteractions, setItemInteractions] = useState(new Map());
+  // Track which item is showing comment input
+  const [commentingItemId, setCommentingItemId] = useState(null);
+  const [commentText, setCommentText] = useState('');
+  const [submittingComment, setSubmittingComment] = useState(false);
+  // Track visible comments for each item (Map<itemId, {comments: [], visibleCount: number}>)
+  const [itemComments, setItemComments] = useState(new Map());
+  const [loadingComments, setLoadingComments] = useState(new Map());
 
   const PAGE_SIZE = 20;
+
+  // Load like/comment interactions for items
+  const loadInteractions = useCallback(async (itemsToLoad, replace = false) => {
+    if (!user) return;
+
+    try {
+      const photos = itemsToLoad.map(item => ({
+        id: item.id,
+        type: item.type === NEWSFEED_ITEM_TYPES.PROFILE_PHOTO 
+          ? PHOTO_TYPES.PROFILE_PHOTO 
+          : PHOTO_TYPES.ROLL_IMAGE,
+      }));
+
+      const likeStatusMap = await getPhotosLikeStatus(photos, user.id);
+
+      // Get comment counts
+      const commentCounts = await Promise.all(
+        photos.map(async (photo) => {
+          const count = await getPhotoCommentCount(photo.id, photo.type);
+          return { id: photo.id, count };
+        })
+      );
+
+      // Update interactions state
+      setItemInteractions(prev => {
+        const newMap = new Map(prev);
+        if (replace) {
+          newMap.clear();
+        }
+        itemsToLoad.forEach((item) => {
+          const photoType = item.type === NEWSFEED_ITEM_TYPES.PROFILE_PHOTO 
+            ? PHOTO_TYPES.PROFILE_PHOTO 
+            : PHOTO_TYPES.ROLL_IMAGE;
+          const likeStatus = likeStatusMap.get(item.id) || { liked: false, count: 0 };
+          const commentCount = commentCounts.find(c => c.id === item.id)?.count || 0;
+          
+          newMap.set(item.id, {
+            liked: likeStatus.liked,
+            likeCount: likeStatus.count,
+            commentCount,
+            photoType,
+          });
+        });
+        return newMap;
+      });
+    } catch (error) {
+      console.error('Error loading interactions:', error);
+    }
+  }, [user]);
 
   const loadNewsfeed = useCallback(async (page = 0, isRefresh = false) => {
     try {
@@ -108,6 +183,25 @@ const HomeScreen = () => {
     }
   }, [loadingMore, hasMore, loading, currentPage, loadNewsfeed]);
 
+  // Load interactions when items change
+  useEffect(() => {
+    if (user && items.length > 0) {
+      loadInteractions(items, true);
+    }
+  }, [items, user, loadInteractions]);
+
+  // Auto-load first comment for items with comments (after interactions are loaded)
+  useEffect(() => {
+    if (user && items.length > 0 && itemInteractions.size > 0) {
+      items.forEach(item => {
+        const commentCount = itemInteractions.get(item.id)?.commentCount || 0;
+        if (commentCount > 0 && !itemComments.has(item.id)) {
+          loadComments(item, true);
+        }
+      });
+    }
+  }, [items, user, itemInteractions, itemComments, loadComments]);
+
   const handleUserPress = useCallback((userId) => {
     if (userId) {
       navigation.navigate('PublicProfile', { userId });
@@ -117,8 +211,177 @@ const HomeScreen = () => {
   const handleImagePress = useCallback((item) => {
     if (item.type === NEWSFEED_ITEM_TYPES.ROLL_IMAGE && item.rollId) {
       navigation.navigate('RollDetail', { rollId: item.rollId });
+    } else if (item.type === NEWSFEED_ITEM_TYPES.PROFILE_PHOTO) {
+      // Navigate to photo viewer for profile photos
+      navigation.navigate('PhotoViewer', {
+        photoId: item.id,
+        photoType: PHOTO_TYPES.PROFILE_PHOTO,
+        userId: item.userId,
+        initialIndex: items.findIndex(i => i.id === item.id),
+      });
     }
-  }, [navigation]);
+  }, [navigation, items]);
+
+  // Handle like/unlike
+  const handleLike = useCallback(async (item) => {
+    if (!user) {
+      Alert.alert('Login Required', 'Please log in to like photos');
+      return;
+    }
+
+    try {
+      const photoType = item.type === NEWSFEED_ITEM_TYPES.PROFILE_PHOTO 
+        ? PHOTO_TYPES.PROFILE_PHOTO 
+        : PHOTO_TYPES.ROLL_IMAGE;
+      
+      const currentStatus = itemInteractions.get(item.id) || { liked: false, likeCount: 0 };
+      
+      if (currentStatus.liked) {
+        await unlikePhoto(item.id, photoType, user.id);
+        // Update local state
+        setItemInteractions(prev => {
+          const newMap = new Map(prev);
+          newMap.set(item.id, {
+            ...currentStatus,
+            liked: false,
+            likeCount: Math.max(0, currentStatus.likeCount - 1),
+          });
+          return newMap;
+        });
+      } else {
+        await likePhoto(item.id, photoType, user.id);
+        // Update local state
+        setItemInteractions(prev => {
+          const newMap = new Map(prev);
+          newMap.set(item.id, {
+            ...currentStatus,
+            liked: true,
+            likeCount: currentStatus.likeCount + 1,
+          });
+          return newMap;
+        });
+      }
+    } catch (error) {
+      console.error('Error toggling like:', error);
+      Alert.alert('Error', 'Failed to update like. Please try again.');
+    }
+  }, [user, itemInteractions]);
+
+  // Load comments for an item
+  const loadComments = useCallback(async (item, initialLoad = false) => {
+    const photoType = item.type === NEWSFEED_ITEM_TYPES.PROFILE_PHOTO 
+      ? PHOTO_TYPES.PROFILE_PHOTO 
+      : PHOTO_TYPES.ROLL_IMAGE;
+    
+    try {
+      setLoadingComments(prev => {
+        const newMap = new Map(prev);
+        newMap.set(item.id, true);
+        return newMap;
+      });
+
+      const currentState = itemComments.get(item.id);
+      const offset = initialLoad ? 0 : (currentState?.visibleCount || 1);
+      const limit = initialLoad ? 1 : 5; // First comment, then 5 at a time
+
+      const comments = await getPhotoComments(item.id, photoType, { limit, offset });
+
+      setItemComments(prev => {
+        const newMap = new Map(prev);
+        const existing = newMap.get(item.id) || { comments: [], visibleCount: 0 };
+        
+        if (initialLoad) {
+          newMap.set(item.id, {
+            comments: comments,
+            visibleCount: comments.length,
+            totalCount: itemInteractions.get(item.id)?.commentCount || 0,
+          });
+        } else {
+          newMap.set(item.id, {
+            comments: [...existing.comments, ...comments],
+            visibleCount: existing.visibleCount + comments.length,
+            totalCount: existing.totalCount || itemInteractions.get(item.id)?.commentCount || 0,
+          });
+        }
+        return newMap;
+      });
+    } catch (error) {
+      console.error('Error loading comments:', error);
+    } finally {
+      setLoadingComments(prev => {
+        const newMap = new Map(prev);
+        newMap.set(item.id, false);
+        return newMap;
+      });
+    }
+  }, [itemComments, itemInteractions]);
+
+  // Handle comment button press - toggle inline comment input only
+  const handleComment = useCallback((item) => {
+    if (!user) {
+      Alert.alert('Login Required', 'Please log in to comment on photos');
+      return;
+    }
+
+    // Toggle comment input for this item (comments are already visible by default)
+    if (commentingItemId === item.id) {
+      setCommentingItemId(null);
+      setCommentText('');
+    } else {
+      setCommentingItemId(item.id);
+      setCommentText('');
+    }
+  }, [user, commentingItemId]);
+
+  // Handle comment submit from newsfeed
+  const handleCommentSubmit = useCallback(async (item) => {
+    if (!user || !commentText.trim()) return;
+
+    if (commentText.trim().length > 500) {
+      Alert.alert('Comment Too Long', 'Comments must be 500 characters or less.');
+      return;
+    }
+
+    try {
+      setSubmittingComment(true);
+      const photoType = item.type === NEWSFEED_ITEM_TYPES.PROFILE_PHOTO 
+        ? PHOTO_TYPES.PROFILE_PHOTO 
+        : PHOTO_TYPES.ROLL_IMAGE;
+      
+      const newComment = await addComment(item.id, photoType, user.id, commentText.trim());
+      
+      // Update comment count
+      setItemInteractions(prev => {
+        const newMap = new Map(prev);
+        const current = newMap.get(item.id) || { liked: false, likeCount: 0, commentCount: 0 };
+        newMap.set(item.id, {
+          ...current,
+          commentCount: (current.commentCount || 0) + 1,
+        });
+        return newMap;
+      });
+
+      // Add new comment to visible comments
+      setItemComments(prev => {
+        const newMap = new Map(prev);
+        const existing = newMap.get(item.id) || { comments: [], visibleCount: 0 };
+        newMap.set(item.id, {
+          comments: [...existing.comments, newComment],
+          visibleCount: existing.visibleCount + 1,
+          totalCount: (existing.totalCount || 0) + 1,
+        });
+        return newMap;
+      });
+
+      // Clear input but keep comment section open
+      setCommentText('');
+    } catch (error) {
+      console.error('Error adding comment:', error);
+      Alert.alert('Error', error.message || 'Failed to add comment. Please try again.');
+    } finally {
+      setSubmittingComment(false);
+    }
+  }, [user, commentText]);
 
   const renderItem = useCallback(({ item, index }) => {
     return (
@@ -182,6 +445,131 @@ const HomeScreen = () => {
           </View>
         )}
 
+        {/* Like/Comment Actions */}
+        <View style={styles.actionsContainer}>
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => handleLike(item)}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name={itemInteractions.get(item.id)?.liked ? 'heart' : 'heart-outline'}
+              size={24}
+              color={itemInteractions.get(item.id)?.liked ? colors.error : colors.textPrimary}
+            />
+            {(itemInteractions.get(item.id)?.likeCount || 0) > 0 && (
+              <Text style={styles.actionCount}>
+                {itemInteractions.get(item.id)?.likeCount || 0}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => handleComment(item)}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name={commentingItemId === item.id ? 'chatbubble' : 'chatbubble-outline'}
+              size={24}
+              color={commentingItemId === item.id ? colors.primary : colors.textPrimary}
+            />
+            {(itemInteractions.get(item.id)?.commentCount || 0) > 0 && (
+              <Text style={styles.actionCount}>
+                {itemInteractions.get(item.id)?.commentCount || 0}
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* Comments Display */}
+        {itemComments.has(item.id) && itemComments.get(item.id).comments.length > 0 && (
+          <View style={styles.commentsDisplayContainer}>
+            {itemComments.get(item.id).comments.map((comment) => (
+              <View key={comment.id} style={styles.commentDisplayItem}>
+                <TouchableOpacity
+                  onPress={() => {
+                    if (comment.user_id) {
+                      navigation.navigate('PublicProfile', { userId: comment.user_id });
+                    }
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.commentDisplayUsername}>
+                    {comment.user?.display_name || comment.user?.username || 'Unknown'}
+                  </Text>
+                </TouchableOpacity>
+                <Text style={styles.commentDisplayText}>{comment.comment_text}</Text>
+              </View>
+            ))}
+            
+            {/* View More Button */}
+            {(() => {
+              const commentState = itemComments.get(item.id);
+              const totalCount = commentState?.totalCount || itemInteractions.get(item.id)?.commentCount || 0;
+              const visibleCount = commentState?.visibleCount || 0;
+              const hasMore = totalCount > visibleCount;
+              
+              if (hasMore && !loadingComments.get(item.id)) {
+                return (
+                  <TouchableOpacity
+                    style={styles.viewMoreButton}
+                    onPress={() => loadComments(item, false)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.viewMoreText}>
+                      View more comments ({totalCount - visibleCount} remaining)
+                    </Text>
+                  </TouchableOpacity>
+                );
+              } else if (loadingComments.get(item.id)) {
+                return (
+                  <View style={styles.viewMoreButton}>
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  </View>
+                );
+              }
+              return null;
+            })()}
+          </View>
+        )}
+
+        {/* Inline Comment Input */}
+        {commentingItemId === item.id && user && (
+          <View style={styles.commentInputSection}>
+            <View style={styles.commentInputRow}>
+              <TextInput
+                style={styles.commentInput}
+                placeholder="Add a comment..."
+                placeholderTextColor={colors.textSecondary}
+                value={commentText}
+                onChangeText={setCommentText}
+                multiline
+                maxLength={500}
+                textAlignVertical="top"
+                autoFocus
+              />
+              <TouchableOpacity
+                style={[
+                  styles.sendButton,
+                  (!commentText.trim() || submittingComment || commentText.length > 500) && styles.sendButtonDisabled
+                ]}
+                onPress={() => handleCommentSubmit(item)}
+                disabled={!commentText.trim() || submittingComment || commentText.length > 500}
+              >
+                {submittingComment ? (
+                  <ActivityIndicator size="small" color={colors.buttonText} />
+                ) : (
+                  <Ionicons name="send" size={20} color={colors.buttonText} />
+                )}
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.characterCount}>
+              {commentText.length}/500
+            </Text>
+          </View>
+        )}
+
         {/* Timestamp */}
         <View style={styles.timestampContainer}>
           <Text style={styles.timestamp}>
@@ -190,7 +578,7 @@ const HomeScreen = () => {
         </View>
       </View>
     );
-  }, [handleUserPress, handleImagePress]);
+  }, [handleUserPress, handleImagePress, handleLike, handleComment, handleCommentSubmit, loadComments, itemInteractions, itemComments, loadingComments, commentingItemId, commentText, submittingComment, user, navigation]);
 
   const renderFooter = useCallback(() => {
     if (!loadingMore) return null;
@@ -379,6 +767,97 @@ const styles = StyleSheet.create({
   timestamp: {
     fontSize: 12,
     color: colors.textSecondary,
+  },
+  actionsContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.inputBorder,
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 24,
+  },
+  actionCount: {
+    marginLeft: 6,
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  commentInputSection: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.inputBorder,
+    backgroundColor: colors.background,
+  },
+  commentInputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    marginBottom: 6,
+  },
+  commentInput: {
+    flex: 1,
+    backgroundColor: colors.inputBackground,
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: colors.textPrimary,
+    maxHeight: 100,
+    minHeight: 40,
+    marginRight: 8,
+  },
+  characterCount: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    textAlign: 'right',
+    paddingRight: 4,
+  },
+  sendButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.buttonPrimary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sendButtonDisabled: {
+    opacity: 0.5,
+  },
+  commentsDisplayContainer: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 8,
+    borderTopWidth: 1,
+    borderTopColor: colors.inputBorder,
+  },
+  commentDisplayItem: {
+    marginBottom: 12,
+  },
+  commentDisplayUsername: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textPrimary,
+    marginBottom: 4,
+  },
+  commentDisplayText: {
+    fontSize: 14,
+    color: colors.textPrimary,
+    lineHeight: 20,
+  },
+  viewMoreButton: {
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  viewMoreText: {
+    fontSize: 14,
+    color: colors.primary,
+    fontWeight: '600',
   },
   footerLoader: {
     paddingVertical: 20,
