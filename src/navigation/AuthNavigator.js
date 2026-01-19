@@ -5,6 +5,7 @@ import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
 import LoginScreen from '../screens/LoginScreen';
 import SignUpScreen from '../screens/SignUpScreen';
+import ResetPasswordScreen from '../screens/ResetPasswordScreen';
 import MainNavigator from './MainNavigator';
 import colors from '../constants/colors';
 
@@ -33,6 +34,7 @@ const AuthNavigator = () => {
         >
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="SignUp" component={SignUpScreen} />
+          <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} />
         </Stack.Navigator>
       )}
     </NavigationContainer>

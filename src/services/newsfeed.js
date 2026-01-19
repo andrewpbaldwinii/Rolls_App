@@ -15,17 +15,32 @@ export const NEWSFEED_ITEM_TYPES = {
  * 1. Public profile photos (from public_profile_photos table)
  * 2. Images from public rolls where release_date has passed (developed)
  * 
+ * Prioritizes content from users the current user is following.
+ * 
  * @param {Object} options - Pagination options
  * @param {number} options.page - Page number (0-indexed)
  * @param {number} options.pageSize - Number of items per page (default: 20)
  * @param {string} options.beforeDate - Optional: Only fetch items before this date (for pagination)
+ * @param {string} options.currentUserId - Current user ID (optional, for follower prioritization)
  * @returns {Promise<Object>} { items, hasMore, nextPage }
  */
-export const getNewsfeedItems = async ({ page = 0, pageSize = 20, beforeDate = null } = {}) => {
+export const getNewsfeedItems = async ({ page = 0, pageSize = 20, beforeDate = null, currentUserId = null } = {}) => {
   try {
     const now = new Date().toISOString();
     const limit = pageSize;
     const offset = page * pageSize;
+    
+    // Get list of users current user is following (for prioritization)
+    let followingUserIds = [];
+    if (currentUserId) {
+      const { data: followingData } = await supabase
+        .from('follows')
+        .select('following_id')
+        .eq('follower_id', currentUserId);
+      
+      followingUserIds = (followingData || []).map(f => f.following_id);
+      console.log(`📊 User is following ${followingUserIds.length} users`);
+    }
     
     // Fetch public profile photos from ALL users
     let profilePhotos = [];
@@ -187,11 +202,19 @@ export const getNewsfeedItems = async ({ page = 0, pageSize = 20, beforeDate = n
       console.warn('Error fetching roll images:', err);
     }
     
-    // Combine and sort by created_at (newest first)
+    // Combine and sort: followers first, then by date
     const allItems = [...profilePhotos, ...rollImages].sort((a, b) => {
+      const aIsFollowing = followingUserIds.includes(a.userId);
+      const bIsFollowing = followingUserIds.includes(b.userId);
+      
+      // Prioritize followed users
+      if (aIsFollowing && !bIsFollowing) return -1; // a comes first
+      if (!aIsFollowing && bIsFollowing) return 1;  // b comes first
+      
+      // Both same priority, sort by date (newest first)
       const dateA = new Date(a.createdAt);
       const dateB = new Date(b.createdAt);
-      return dateB - dateA; // Descending (newest first)
+      return dateB - dateA;
     });
     
     console.log(`📊 Newsfeed totals: ${profilePhotos.length} profile photos, ${rollImages.length} roll images, ${allItems.length} total items`);
@@ -255,8 +278,9 @@ export const getNewsfeedItems = async ({ page = 0, pageSize = 20, beforeDate = n
 /**
  * Get initial newsfeed items (first page)
  * @param {number} pageSize - Number of items per page
+ * @param {string} currentUserId - Current user ID (optional, for follower prioritization)
  * @returns {Promise<Object>} Newsfeed data
  */
-export const getInitialNewsfeed = async (pageSize = 20) => {
-  return getNewsfeedItems({ page: 0, pageSize });
+export const getInitialNewsfeed = async (pageSize = 20, currentUserId = null) => {
+  return getNewsfeedItems({ page: 0, pageSize, currentUserId });
 };

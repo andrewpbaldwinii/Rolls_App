@@ -358,37 +358,42 @@ const CameraScreen = () => {
         )}
       </View>
 
-      {/* Camera Toggle Button - Top Right */}
-      {frontDevice && backDevice && (
-        <View style={[styles.cameraToggleContainer, { top: insets.top + 16, right: 16 }]}>
-          <TouchableOpacity
-            style={styles.cameraToggleButton}
-            onPress={() => {
-              setCameraType(prev => prev === 'back' ? 'front' : 'back');
-            }}
-            activeOpacity={0.8}
-            disabled={isCapturing || uploading}
-          >
-            <Ionicons 
-              name={cameraType === 'back' ? 'camera-reverse' : 'camera-reverse-outline'} 
-              size={24} 
-              color={colors.buttonText} 
-            />
-          </TouchableOpacity>
-        </View>
-      )}
-
       {/* Capture Button Overlay */}
       <View style={[styles.overlay, { paddingBottom: insets.bottom + 20 }]}>
-        {/* Capture Button - Centered */}
-        <TouchableOpacity
-          style={[styles.captureButton, (isCapturing || uploading) && styles.captureButtonActive]}
-          onPress={takePhoto}
-          disabled={isCapturing || uploading}
-          activeOpacity={0.8}
-        >
-          <View style={styles.captureButtonInner} />
-        </TouchableOpacity>
+        <View style={styles.captureControls}>
+          {/* Camera Toggle Button - Left of Capture Button */}
+          {frontDevice && backDevice && (
+            <TouchableOpacity
+              style={styles.cameraToggleButton}
+              onPress={() => {
+                setCameraType(prev => prev === 'back' ? 'front' : 'back');
+              }}
+              activeOpacity={0.8}
+              disabled={isCapturing || uploading}
+            >
+              <Ionicons 
+                name={cameraType === 'back' ? 'camera-reverse' : 'camera-reverse-outline'} 
+                size={24} 
+                color={colors.buttonText} 
+              />
+            </TouchableOpacity>
+          )}
+          
+          {/* Capture Button - Centered */}
+          <TouchableOpacity
+            style={[styles.captureButton, (isCapturing || uploading) && styles.captureButtonActive]}
+            onPress={takePhoto}
+            disabled={isCapturing || uploading}
+            activeOpacity={0.8}
+          >
+            <View style={styles.captureButtonInner} />
+          </TouchableOpacity>
+          
+          {/* Spacer to balance the layout when toggle button is present */}
+          {frontDevice && backDevice && (
+            <View style={styles.cameraToggleButton} />
+          )}
+        </View>
         
         {(isCapturing || uploading) && (
           <ActivityIndicator size="small" color={colors.buttonText} style={styles.capturingIndicator} />
@@ -414,9 +419,11 @@ const styles = StyleSheet.create({
     paddingVertical: 40,
     flexDirection: 'column',
   },
-  cameraToggleContainer: {
-    position: 'absolute',
-    zIndex: 10,
+  captureControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 24,
   },
   cameraToggleButton: {
     width: 48,

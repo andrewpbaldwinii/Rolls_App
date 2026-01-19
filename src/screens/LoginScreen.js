@@ -27,25 +27,139 @@ const LoginScreen = ({ navigation }) => {
 
     setLoading(true);
     try {
+      console.log('Attempting login for email:', email.trim());
+      
       const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password: password,
       });
 
       if (error) {
-        Alert.alert('Login Error', error.message);
+        console.error('Login error details:', {
+          message: error.message,
+          status: error.status,
+          name: error.name,
+        });
+        
+        // Provide more helpful error messages
+        let errorMessage = error.message;
+        let showResendOption = false;
+        
+        // Check for common error cases
+        if (error.message?.includes('Invalid login credentials') || error.message?.includes('Invalid credentials')) {
+          errorMessage = 'Invalid email or password. This usually means:\n\n• The password is incorrect\n• The account doesn\'t exist yet\n• The password wasn\'t saved correctly\n\nTry using "Forgot Password?" to reset your password.';
+          // Don't show resend option for invalid credentials - password reset is better
+          showResendOption = false;
+        } else if (error.message?.includes('Email not confirmed') || error.message?.includes('not confirmed')) {
+          errorMessage = 'Please check your email and confirm your account before logging in.';
+          showResendOption = true;
+        } else if (error.message?.includes('Email rate limit')) {
+          errorMessage = 'Too many login attempts. Please wait a moment and try again.';
+        }
+        
+        if (showResendOption) {
+          Alert.alert(
+            'Login Error',
+            errorMessage,
+            [
+              { text: 'OK', style: 'cancel' },
+              {
+                text: 'Resend Confirmation Email',
+                onPress: async () => {
+                  try {
+                    const { error: resendError } = await supabase.auth.resend({
+                      type: 'signup',
+                      email: email.trim(),
+                    });
+                    if (resendError) {
+                      Alert.alert('Error', resendError.message);
+                    } else {
+                      Alert.alert('Success', 'Confirmation email sent! Please check your inbox.');
+                    }
+                  } catch (err) {
+                    Alert.alert('Error', 'Failed to resend confirmation email');
+                    console.error('Resend error:', err);
+                  }
+                },
+              },
+            ]
+          );
+        } else {
+          // For invalid credentials, offer password reset
+          if (error.message?.includes('Invalid login credentials') || error.message?.includes('Invalid credentials')) {
+            Alert.alert(
+              'Login Error',
+              errorMessage,
+              [
+                { text: 'OK', style: 'cancel' },
+                {
+                  text: 'Reset Password',
+                  onPress: () => handleForgotPassword(),
+                },
+              ]
+            );
+          } else {
+            Alert.alert('Login Error', errorMessage);
+          }
+        }
         return;
       }
 
       // Navigation will be handled by AuthNavigator based on auth state
       if (data.user) {
         // Success - AuthNavigator will handle navigation
+        console.log('Login successful:', {
+          userId: data.user.id,
+          email: data.user.email,
+          confirmed: data.user.email_confirmed_at ? 'Yes' : 'No',
+        });
       }
     } catch (error) {
       Alert.alert('Error', 'An unexpected error occurred');
       console.error('Login error:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!email) {
+      Alert.alert(
+        'Email Required',
+        'Please enter your email address first, then tap "Forgot Password" again.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    try {
+      // For mobile apps, we don't need a redirect URL - the user will reset password in-app
+      // The email will contain a token that can be used, but for simplicity,
+      // we'll let them reset directly in the app after receiving the email
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: 'rollsapp://reset-password',
+      });
+
+      if (error) {
+        Alert.alert('Error', error.message);
+        console.error('Password reset error:', error);
+        return;
+      }
+
+      Alert.alert(
+        'Password Reset Email Sent',
+        'Check your email for a password reset link. After clicking the link, you can set a new password in the app.',
+        [
+          { text: 'OK' },
+          {
+            text: 'Go to Reset Screen',
+            onPress: () => navigation.navigate('ResetPassword'),
+          },
+        ]
+      );
+    } catch (error) {
+      Alert.alert('Error', 'Failed to send password reset email');
+      console.error('Password reset error:', error);
     }
   };
 
@@ -96,6 +210,15 @@ const LoginScreen = ({ navigation }) => {
           ) : (
             <Text style={styles.buttonText}>Login</Text>
           )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.linkButton}
+          onPress={handleForgotPassword}
+        >
+          <Text style={styles.linkText}>
+            Forgot Password?
+          </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
