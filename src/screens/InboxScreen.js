@@ -3,8 +3,9 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   FlatList,
+  TouchableOpacity,
+  Image,
   ActivityIndicator,
   RefreshControl,
 } from 'react-native';
@@ -12,34 +13,29 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../contexts/AuthContext';
-import { getNotifications, getUnreadNotificationCount } from '../services/notifications';
-import { getUnreadMessageCount } from '../services/messaging';
+import { getConversations, getUnreadMessageCount } from '../services/messaging';
 import colors from '../constants/colors';
 
-const NotificationsScreen = ({ navigation }) => {
+const InboxScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const [notifications, setNotifications] = useState([]);
+  const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
 
-  const loadNotifications = useCallback(async () => {
+  const loadConversations = useCallback(async () => {
     if (!user?.id) return;
 
     try {
       setLoading(true);
-      const data = await getNotifications(user.id);
-      setNotifications(data);
+      const data = await getConversations(user.id);
+      setConversations(data);
       
-      const count = await getUnreadNotificationCount(user.id);
+      const count = await getUnreadMessageCount(user.id);
       setUnreadCount(count);
-      
-      const messageCount = await getUnreadMessageCount(user.id);
-      setUnreadMessageCount(messageCount);
     } catch (error) {
-      console.error('Error loading notifications:', error);
+      console.error('Error loading conversations:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -48,17 +44,20 @@ const NotificationsScreen = ({ navigation }) => {
 
   useFocusEffect(
     useCallback(() => {
-      loadNotifications();
-    }, [loadNotifications])
+      loadConversations();
+    }, [loadConversations])
   );
 
   const handleRefresh = useCallback(() => {
     setRefreshing(true);
-    loadNotifications();
-  }, [loadNotifications]);
+    loadConversations();
+  }, [loadConversations]);
 
-  const handleInboxPress = () => {
-    navigation.navigate('Inbox');
+  const handleConversationPress = (conversation) => {
+    navigation.navigate('Message', {
+      conversationId: conversation.id,
+      otherUser: conversation.otherUser,
+    });
   };
 
   const formatTimestamp = (timestamp) => {
@@ -84,91 +83,92 @@ const NotificationsScreen = ({ navigation }) => {
     }
   };
 
-  const renderNotification = ({ item }) => {
-    const isUnread = !item.read_at;
-    
+  const renderConversation = ({ item }) => {
     return (
       <TouchableOpacity
-        style={[
-          styles.notificationItem,
-          isUnread && styles.notificationItemUnread,
-        ]}
+        style={styles.conversationItem}
+        onPress={() => handleConversationPress(item)}
         activeOpacity={0.7}
-        onPress={() => {
-          // Handle notification tap based on type
-          if (item.type === 'message' && item.related_user_id) {
-            navigation.navigate('Message', {
-              userId: item.related_user_id,
-            });
-          }
-        }}
       >
-        <View style={styles.notificationIcon}>
-          {item.type === 'message' && (
-            <Ionicons name="mail" size={24} color={colors.primary} />
-          )}
-          {item.type === 'like' && (
-            <Ionicons name="heart" size={24} color={colors.error} />
-          )}
-          {item.type === 'comment' && (
-            <Ionicons name="chatbubble" size={24} color={colors.primary} />
-          )}
-          {item.type === 'follow' && (
-            <Ionicons name="person-add" size={24} color={colors.primary} />
-          )}
-        </View>
-        <View style={styles.notificationContent}>
-          <Text style={styles.notificationTitle}>{item.title}</Text>
-          {item.body && (
-            <Text style={styles.notificationBody} numberOfLines={2}>
-              {item.body}
+        {item.otherUser.avatarUrl ? (
+          <Image
+            source={{ uri: item.otherUser.avatarUrl }}
+            style={styles.avatar}
+            resizeMode="cover"
+          />
+        ) : (
+          <View style={styles.avatarPlaceholder}>
+            <Ionicons name="person" size={24} color={colors.textSecondary} />
+          </View>
+        )}
+        
+        <View style={styles.conversationContent}>
+          <View style={styles.conversationHeader}>
+            <Text style={styles.username} numberOfLines={1}>
+              {item.otherUser.displayName || item.otherUser.username || 'Unknown User'}
             </Text>
-          )}
-          <Text style={styles.notificationTime}>
-            {formatTimestamp(item.created_at)}
+            <Text style={styles.timestamp}>
+              {formatTimestamp(item.lastMessageAt)}
+            </Text>
+          </View>
+          <Text style={styles.lastMessage} numberOfLines={1}>
+            Tap to view messages
           </Text>
         </View>
-        {isUnread && <View style={styles.unreadDot} />}
       </TouchableOpacity>
     );
   };
 
-  return (
-    <View style={styles.container}>
-      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-        <Text style={styles.headerTitle}>Notifications</Text>
-        <TouchableOpacity
-          style={styles.inboxButton}
-          onPress={handleInboxPress}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="mail" size={24} color={colors.textWhite} />
-          {unreadMessageCount > 0 && (
-            <View style={styles.inboxBadge}>
-              <Text style={styles.inboxBadgeText}>
-                {unreadMessageCount > 99 ? '99+' : unreadMessageCount}
-              </Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      {loading && notifications.length === 0 ? (
+  if (loading && conversations.length === 0) {
+    return (
+      <View style={styles.container}>
+        <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            style={styles.backButton}
+          >
+            <Ionicons name="arrow-back" size={24} color={colors.textWhite} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Inbox</Text>
+          <View style={styles.headerRight} />
+        </View>
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
-      ) : notifications.length === 0 ? (
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backButton}
+        >
+          <Ionicons name="arrow-back" size={24} color={colors.textWhite} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Inbox</Text>
+        {unreadCount > 0 && (
+          <View style={styles.unreadBadge}>
+            <Text style={styles.unreadBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+          </View>
+        )}
+        <View style={styles.headerRight} />
+      </View>
+
+      {conversations.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Ionicons name="notifications-outline" size={64} color={colors.textSecondary} />
-          <Text style={styles.emptyTitle}>No notifications</Text>
+          <Ionicons name="mail-outline" size={64} color={colors.textSecondary} />
+          <Text style={styles.emptyTitle}>No messages yet</Text>
           <Text style={styles.emptyText}>
-            You'll see alerts for invites, comments, likes, and more here
+            Start a conversation by messaging someone from their profile
           </Text>
         </View>
       ) : (
         <FlatList
-          data={notifications}
-          renderItem={renderNotification}
+          data={conversations}
+          renderItem={renderConversation}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           refreshControl={
@@ -198,31 +198,32 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  backButton: {
+    padding: 4,
+  },
   headerTitle: {
-    fontSize: 24,
+    fontSize: 18,
     fontWeight: 'bold',
     color: colors.textWhite,
     flex: 1,
+    textAlign: 'center',
   },
-  inboxButton: {
-    padding: 8,
-    position: 'relative',
+  headerRight: {
+    width: 32,
   },
-  inboxBadge: {
-    position: 'absolute',
-    top: 4,
-    right: 4,
+  unreadBadge: {
     backgroundColor: colors.error,
     borderRadius: 10,
-    minWidth: 18,
-    height: 18,
-    paddingHorizontal: 4,
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 6,
     justifyContent: 'center',
     alignItems: 'center',
+    marginLeft: 8,
   },
-  inboxBadgeText: {
+  unreadBadgeText: {
     color: colors.textWhite,
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: 'bold',
   },
   loadingContainer: {
@@ -251,7 +252,7 @@ const styles = StyleSheet.create({
   listContent: {
     paddingVertical: 8,
   },
-  notificationItem: {
+  conversationItem: {
     flexDirection: 'row',
     paddingHorizontal: 16,
     paddingVertical: 12,
@@ -259,45 +260,46 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.inputBorder,
     backgroundColor: colors.background,
   },
-  notificationItemUnread: {
-    backgroundColor: colors.inputBackground,
+  avatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    marginRight: 12,
   },
-  notificationIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  avatarPlaceholder: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     backgroundColor: colors.inputBackground,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
   },
-  notificationContent: {
+  conversationContent: {
     flex: 1,
+    justifyContent: 'center',
   },
-  notificationTitle: {
+  conversationHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  username: {
     fontSize: 16,
     fontWeight: '600',
     color: colors.textPrimary,
-    marginBottom: 4,
+    flex: 1,
   },
-  notificationBody: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    marginBottom: 4,
-  },
-  notificationTime: {
+  timestamp: {
     fontSize: 12,
     color: colors.textSecondary,
-  },
-  unreadDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.primary,
-    alignSelf: 'center',
     marginLeft: 8,
+  },
+  lastMessage: {
+    fontSize: 14,
+    color: colors.textSecondary,
   },
 });
 
-export default NotificationsScreen;
-
+export default InboxScreen;

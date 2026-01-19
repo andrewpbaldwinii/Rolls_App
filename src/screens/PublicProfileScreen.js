@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -28,6 +29,18 @@ import {
   isFollowing,
 } from '../services/publicProfile';
 import { getRollImageUrlAsync } from '../services/storage';
+import { supabase } from '../lib/supabase';
+import {
+  likePhoto,
+  unlikePhoto,
+  getPhotoLikeCount,
+  getPhotoCommentCount,
+  getPhotosLikeStatus,
+  addComment,
+  getPhotoComments,
+  PHOTO_TYPES,
+} from '../services/interactions';
+import { FlatList, RefreshControl, TextInput, KeyboardAvoidingView } from 'react-native';
 import colors from '../constants/colors';
 
 const { width } = Dimensions.get('window');
@@ -52,13 +65,21 @@ const PublicProfileScreen = ({ route, navigation }) => {
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [following, setFollowing] = useState(false);
-  const [viewMode, setViewMode] = useState('photos'); // 'photos' or 'rolls'
+  const [viewMode, setViewMode] = useState('photos'); // 'photos', 'rolls', or 'feed'
+  const [isProfilePrivate, setIsProfilePrivate] = useState(false);
+  const [canViewPrivateProfile, setCanViewPrivateProfile] = useState(true);
+  // Feed view state
+  const [feedItems, setFeedItems] = useState([]);
+  const [feedInteractions, setFeedInteractions] = useState(new Map());
+  const [feedCommentingItemId, setFeedCommentingItemId] = useState(null);
+  const [feedCommentText, setFeedCommentText] = useState('');
+  const [feedSubmittingComment, setFeedSubmittingComment] = useState(false);
+  const [feedItemComments, setFeedItemComments] = useState(new Map());
+  const [feedLoadingComments, setFeedLoadingComments] = useState(new Map());
+  const [refreshingFeed, setRefreshingFeed] = useState(false);
 
-  useEffect(() => {
-    loadProfileData();
-  }, [userId]);
-
-  const loadProfileData = async () => {
+  // useCallback hook - must be called after all useState hooks
+  const loadProfileData = useCallback(async () => {
     if (!userId) {
       console.error('No user ID provided');
       Alert.alert('Error', 'No user ID provided');
@@ -86,10 +107,56 @@ const PublicProfileScreen = ({ route, navigation }) => {
         return;
       }
 
-      // Load other data in parallel (non-critical)
+      // Check profile privacy and access
+      let canView = true;
+      let isPrivate = false;
+      
+      if (!isOwnProfile) {
+        const { data: userData, error: userDataError } = await supabase
+          .from('users')
+          .select('profile_is_public')
+          .eq('id', userId)
+          .single();
+
+        // Default to public if column doesn't exist or is null
+        // profile_is_public is TRUE by default, so if it's null/undefined, treat as public
+        const profileIsPublic = userData?.profile_is_public ?? true;
+        isPrivate = !profileIsPublic;
+        setIsProfilePrivate(isPrivate);
+
+        if (isPrivate) {
+          // Check if current user is following
+          const { data: { user: currentUser } } = await supabase.auth.getUser();
+          if (currentUser) {
+            const { data: followData, error: followError } = await supabase
+              .from('follows')
+              .select('id')
+              .eq('follower_id', currentUser.id)
+              .eq('following_id', userId)
+              .single();
+            
+            // If table doesn't exist (PGRST205), treat as not following
+            if (followError && followError.code === 'PGRST205') {
+              canView = false;
+            } else {
+              canView = !!followData;
+            }
+          } else {
+            canView = false;
+          }
+        }
+      }
+      
+      setCanViewPrivateProfile(canView);
+
+      // Get current user ID for passing to functions
+      const { data: { user: currentAuthUser } } = await supabase.auth.getUser();
+      const currentUserId = currentAuthUser?.id || null;
+
+      // Load other data in parallel (non-critical) - only if can view
       const [rolls, photos, followStatus] = await Promise.allSettled([
-        getPublicRolls(userId),
-        getPublicPhotos(userId),
+        canView ? getPublicRolls(userId, currentUserId) : Promise.resolve([]),
+        canView ? getPublicPhotos(userId, currentUserId) : Promise.resolve([]),
         !isOwnProfile ? isFollowing(userId) : Promise.resolve(false),
       ]);
 
@@ -113,8 +180,27 @@ const PublicProfileScreen = ({ route, navigation }) => {
       );
       setRollTitleImageUrls(titleImageUrlMap);
 
-      setPublicPhotos(photos.status === 'fulfilled' ? photos.value : []);
+      const loadedPhotos = photos.status === 'fulfilled' ? photos.value : [];
+      setPublicPhotos(loadedPhotos);
       setFollowing(followStatus.status === 'fulfilled' ? followStatus.value : false);
+      
+      // Prepare feed items from photos (newsfeed style) - sorted by created_at descending
+      if (loadedPhotos.length > 0) {
+        const feedItemsData = loadedPhotos
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+          .map(photo => ({
+            id: photo.id,
+            type: 'profile_photo',
+            imageUrl: photo.image_url,
+            caption: photo.caption,
+            createdAt: photo.created_at,
+            userId: userId,
+            username: profileData?.username || null,
+            displayName: profileData?.display_name || null,
+            avatarUrl: profileData?.avatar_url || null,
+          }));
+        setFeedItems(feedItemsData);
+      }
     } catch (error) {
       console.error('Error loading profile data:', error);
       Alert.alert(
@@ -124,7 +210,240 @@ const PublicProfileScreen = ({ route, navigation }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [userId, isOwnProfile]);
+
+  // useEffect hook - must be called after useCallback
+  useEffect(() => {
+    loadProfileData();
+  }, [loadProfileData]);
+
+  // useFocusEffect hook - must be called after useEffect
+  useFocusEffect(
+    useCallback(() => {
+      console.log('PublicProfileScreen focused - refreshing stats');
+      loadProfileData();
+    }, [loadProfileData])
+  );
+
+  // Load feed interactions when feed items change
+  useEffect(() => {
+    if (currentUser && feedItems.length > 0) {
+      loadFeedInteractions(feedItems);
+    }
+  }, [feedItems, currentUser, loadFeedInteractions]);
+
+  // Load interactions for feed items
+  const loadFeedInteractions = useCallback(async (items) => {
+    if (!currentUser || items.length === 0) return;
+
+    try {
+      const photos = items.map(item => ({
+        id: item.id,
+        type: PHOTO_TYPES.PROFILE_PHOTO,
+      }));
+
+      const likeStatusMap = await getPhotosLikeStatus(photos, currentUser.id);
+
+      const commentCounts = await Promise.all(
+        photos.map(async (photo) => {
+          const count = await getPhotoCommentCount(photo.id, photo.type);
+          return { id: photo.id, count };
+        })
+      );
+
+      setFeedInteractions(prev => {
+        const newMap = new Map(prev);
+        items.forEach((item) => {
+          const likeStatus = likeStatusMap.get(item.id) || { liked: false, count: 0 };
+          const commentCount = commentCounts.find(c => c.id === item.id)?.count || 0;
+          
+          newMap.set(item.id, {
+            liked: likeStatus.liked,
+            likeCount: likeStatus.count,
+            commentCount,
+          });
+        });
+        return newMap;
+      });
+
+      // Auto-load first comment for items with comments
+      items.forEach((item) => {
+        const commentCount = commentCounts.find(c => c.id === item.id)?.count || 0;
+        if (commentCount > 0 && !feedItemComments.has(item.id)) {
+          loadFeedComments(item, true);
+        }
+      });
+    } catch (error) {
+      console.error('Error loading feed interactions:', error);
+    }
+  }, [currentUser, feedItemComments]);
+
+  // Load comments for feed item
+  const loadFeedComments = useCallback(async (item, initialLoad = false) => {
+    try {
+      setFeedLoadingComments(prev => {
+        const newMap = new Map(prev);
+        newMap.set(item.id, true);
+        return newMap;
+      });
+
+      const currentState = feedItemComments.get(item.id);
+      const offset = initialLoad ? 0 : (currentState?.visibleCount || 1);
+      const limit = initialLoad ? 1 : 5;
+
+      const comments = await getPhotoComments(item.id, PHOTO_TYPES.PROFILE_PHOTO, { limit, offset });
+
+      setFeedItemComments(prev => {
+        const newMap = new Map(prev);
+        const existing = newMap.get(item.id) || { comments: [], visibleCount: 0 };
+        
+        if (initialLoad) {
+          newMap.set(item.id, {
+            comments: comments,
+            visibleCount: comments.length,
+            totalCount: feedInteractions.get(item.id)?.commentCount || 0,
+          });
+        } else {
+          newMap.set(item.id, {
+            comments: [...existing.comments, ...comments],
+            visibleCount: existing.visibleCount + comments.length,
+            totalCount: existing.totalCount || feedInteractions.get(item.id)?.commentCount || 0,
+          });
+        }
+        return newMap;
+      });
+    } catch (error) {
+      console.error('Error loading feed comments:', error);
+    } finally {
+      setFeedLoadingComments(prev => {
+        const newMap = new Map(prev);
+        newMap.set(item.id, false);
+        return newMap;
+      });
+    }
+  }, [feedItemComments, feedInteractions]);
+
+  // Handle like for feed item
+  const handleFeedLike = useCallback(async (item) => {
+    if (!currentUser) {
+      Alert.alert('Login Required', 'Please log in to like photos');
+      return;
+    }
+
+    try {
+      const currentStatus = feedInteractions.get(item.id) || { liked: false, likeCount: 0 };
+      
+      if (currentStatus.liked) {
+        await unlikePhoto(item.id, PHOTO_TYPES.PROFILE_PHOTO, currentUser.id);
+        setFeedInteractions(prev => {
+          const newMap = new Map(prev);
+          newMap.set(item.id, {
+            ...currentStatus,
+            liked: false,
+            likeCount: Math.max(0, currentStatus.likeCount - 1),
+          });
+          return newMap;
+        });
+      } else {
+        await likePhoto(item.id, PHOTO_TYPES.PROFILE_PHOTO, currentUser.id);
+        setFeedInteractions(prev => {
+          const newMap = new Map(prev);
+          newMap.set(item.id, {
+            ...currentStatus,
+            liked: true,
+            likeCount: currentStatus.likeCount + 1,
+          });
+          return newMap;
+        });
+      }
+    } catch (error) {
+      console.error('Error toggling like:', error);
+      Alert.alert('Error', 'Failed to update like. Please try again.');
+    }
+  }, [currentUser, feedInteractions]);
+
+  // Handle comment for feed item
+  const handleFeedComment = useCallback((item) => {
+    if (!currentUser) {
+      Alert.alert('Login Required', 'Please log in to comment on photos');
+      return;
+    }
+
+    if (feedCommentingItemId === item.id) {
+      setFeedCommentingItemId(null);
+      setFeedCommentText('');
+    } else {
+      setFeedCommentingItemId(item.id);
+      setFeedCommentText('');
+    }
+  }, [currentUser, feedCommentingItemId]);
+
+  // Handle comment submit for feed item
+  const handleFeedCommentSubmit = useCallback(async (item) => {
+    if (!currentUser || !feedCommentText.trim()) return;
+
+    if (feedCommentText.trim().length > 500) {
+      Alert.alert('Comment Too Long', 'Comments must be 500 characters or less.');
+      return;
+    }
+
+    try {
+      setFeedSubmittingComment(true);
+      const newComment = await addComment(item.id, PHOTO_TYPES.PROFILE_PHOTO, currentUser.id, feedCommentText.trim());
+      
+      setFeedInteractions(prev => {
+        const newMap = new Map(prev);
+        const current = newMap.get(item.id) || { liked: false, likeCount: 0, commentCount: 0 };
+        newMap.set(item.id, {
+          ...current,
+          commentCount: (current.commentCount || 0) + 1,
+        });
+        return newMap;
+      });
+
+      setFeedItemComments(prev => {
+        const newMap = new Map(prev);
+        const existing = newMap.get(item.id) || { comments: [], visibleCount: 0 };
+        newMap.set(item.id, {
+          comments: [...existing.comments, newComment],
+          visibleCount: existing.visibleCount + 1,
+          totalCount: (existing.totalCount || 0) + 1,
+        });
+        return newMap;
+      });
+
+      setFeedCommentText('');
+    } catch (error) {
+      console.error('Error adding comment:', error);
+      Alert.alert('Error', error.message || 'Failed to add comment. Please try again.');
+    } finally {
+      setFeedSubmittingComment(false);
+    }
+  }, [currentUser, feedCommentText]);
+
+  // Format timestamp helper
+  const formatTimestamp = useCallback((timestamp) => {
+    if (!timestamp) return '';
+    
+    const now = new Date();
+    const date = new Date(timestamp);
+    const diffInSeconds = Math.floor((now - date) / 1000);
+    
+    if (diffInSeconds < 60) {
+      return 'just now';
+    } else if (diffInSeconds < 3600) {
+      const minutes = Math.floor(diffInSeconds / 60);
+      return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'} ago`;
+    } else if (diffInSeconds < 86400) {
+      const hours = Math.floor(diffInSeconds / 3600);
+      return `${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
+    } else if (diffInSeconds < 604800) {
+      const days = Math.floor(diffInSeconds / 86400);
+      return `${days} ${days === 1 ? 'day' : 'days'} ago`;
+    } else {
+      return date.toLocaleDateString();
+    }
+  }, []);
 
   const handleImagePicker = async () => {
     // Note: You'll need to install react-native-image-picker
@@ -265,9 +584,18 @@ const PublicProfileScreen = ({ route, navigation }) => {
       // Reload stats
       const profileData = await getPublicProfile(userId);
       setProfile(profileData);
-    } catch (error) {
-      console.error('Error toggling follow:', error);
-      Alert.alert('Error', 'Failed to update follow status');
+    } catch (err) {
+      console.error('Error toggling follow:', err);
+      // Use setTimeout to ensure component is mounted before showing alert
+      setTimeout(() => {
+        try {
+          const errorMessage = err?.message || 'Failed to update follow status';
+          Alert.alert('Error', errorMessage);
+        } catch (alertError) {
+          // If alert fails, just log it
+          console.warn('Could not show alert:', alertError);
+        }
+      }, 100);
     }
   };
 
@@ -326,8 +654,12 @@ const PublicProfileScreen = ({ route, navigation }) => {
                 isLastInRow && styles.gridItemLast,
               ]}
               onPress={() => {
-                // TODO: Navigate to photo detail
-                Alert.alert('Photo', photo.caption || 'No caption');
+                navigation.navigate('PhotoViewer', {
+                  photoId: photo.id,
+                  photoType: 'profile_photo',
+                  userId: userId,
+                  initialIndex: index,
+                });
               }}
             >
               <Image
@@ -336,6 +668,212 @@ const PublicProfileScreen = ({ route, navigation }) => {
                 resizeMode="cover"
               />
             </TouchableOpacity>
+          );
+        })}
+      </View>
+    );
+  };
+
+  // Render feed view (newsfeed style) - simplified to work in ScrollView
+  const renderFeed = () => {
+    if (feedItems.length === 0) {
+      return (
+        <View style={styles.emptyState}>
+          <Ionicons name="images-outline" size={64} color={colors.textSecondary} />
+          <Text style={styles.emptyText}>No photos yet</Text>
+        </View>
+      );
+    }
+
+    return (
+      <View>
+        {feedItems.map((item) => {
+          return (
+            <View key={item.id} style={styles.feedItem}>
+          {/* User Header */}
+          <View style={styles.feedUserHeader}>
+            {item.avatarUrl ? (
+              <Image
+                source={{ uri: item.avatarUrl }}
+                style={styles.feedAvatar}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.feedAvatarPlaceholder}>
+                <Ionicons name="person" size={20} color={colors.textSecondary} />
+              </View>
+            )}
+            <View style={styles.feedUserText}>
+              <Text style={styles.feedUsername}>
+                {item.displayName || item.username || 'Unknown User'}
+              </Text>
+            </View>
+          </View>
+
+          {/* Image */}
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => {
+              navigation.navigate('PhotoViewer', {
+                photoId: item.id,
+                photoType: PHOTO_TYPES.PROFILE_PHOTO,
+                userId: userId,
+                initialIndex: feedItems.findIndex(i => i.id === item.id),
+              });
+            }}
+          >
+            <Image
+              source={{ uri: item.imageUrl }}
+              style={styles.feedImage}
+              resizeMode="cover"
+            />
+          </TouchableOpacity>
+
+          {/* Caption */}
+          {item.caption && (
+            <View style={styles.feedCaptionContainer}>
+              <Text style={styles.feedCaption} numberOfLines={3}>
+                <Text style={styles.feedCaptionUsername}>
+                  {item.displayName || item.username || 'Unknown'}
+                </Text>
+                {' '}
+                {item.caption}
+              </Text>
+            </View>
+          )}
+
+          {/* Like/Comment Actions */}
+          <View style={styles.feedActionsContainer}>
+            <TouchableOpacity
+              style={styles.feedActionButton}
+              onPress={() => handleFeedLike(item)}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={feedInteractions.get(item.id)?.liked ? 'heart' : 'heart-outline'}
+                size={24}
+                color={feedInteractions.get(item.id)?.liked ? colors.error : colors.textPrimary}
+              />
+              {(feedInteractions.get(item.id)?.likeCount || 0) > 0 && (
+                <Text style={styles.feedActionCount}>
+                  {feedInteractions.get(item.id)?.likeCount || 0}
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.feedActionButton}
+              onPress={() => handleFeedComment(item)}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={feedCommentingItemId === item.id ? 'chatbubble' : 'chatbubble-outline'}
+                size={24}
+                color={feedCommentingItemId === item.id ? colors.primary : colors.textPrimary}
+              />
+              {(feedInteractions.get(item.id)?.commentCount || 0) > 0 && (
+                <Text style={styles.feedActionCount}>
+                  {feedInteractions.get(item.id)?.commentCount || 0}
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* Comments Display */}
+          {feedItemComments.has(item.id) && feedItemComments.get(item.id).comments.length > 0 && (
+            <View style={styles.feedCommentsDisplayContainer}>
+              {feedItemComments.get(item.id).comments.map((comment) => (
+                <View key={comment.id} style={styles.feedCommentDisplayItem}>
+                  <TouchableOpacity
+                    onPress={() => {
+                      if (comment.user_id) {
+                        navigation.navigate('PublicProfile', { userId: comment.user_id });
+                      }
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.feedCommentDisplayUsername}>
+                      {comment.user?.display_name || comment.user?.username || 'Unknown'}
+                    </Text>
+                  </TouchableOpacity>
+                  <Text style={styles.feedCommentDisplayText}>{comment.comment_text}</Text>
+                </View>
+              ))}
+              
+              {/* View More Button */}
+              {(() => {
+                const commentState = feedItemComments.get(item.id);
+                const totalCount = commentState?.totalCount || feedInteractions.get(item.id)?.commentCount || 0;
+                const visibleCount = commentState?.visibleCount || 0;
+                const hasMore = totalCount > visibleCount;
+                
+                if (hasMore && !feedLoadingComments.get(item.id)) {
+                  return (
+                    <TouchableOpacity
+                      style={styles.feedViewMoreButton}
+                      onPress={() => loadFeedComments(item, false)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.feedViewMoreText}>
+                        View more comments ({totalCount - visibleCount} remaining)
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                } else if (feedLoadingComments.get(item.id)) {
+                  return (
+                    <View style={styles.feedViewMoreButton}>
+                      <ActivityIndicator size="small" color={colors.primary} />
+                    </View>
+                  );
+                }
+                return null;
+              })()}
+            </View>
+          )}
+
+          {/* Inline Comment Input */}
+          {feedCommentingItemId === item.id && currentUser && (
+            <View style={styles.feedCommentInputSection}>
+              <View style={styles.feedCommentInputRow}>
+                <TextInput
+                  style={styles.feedCommentInput}
+                  placeholder="Add a comment..."
+                  placeholderTextColor={colors.textSecondary}
+                  value={feedCommentText}
+                  onChangeText={setFeedCommentText}
+                  multiline
+                  maxLength={500}
+                  textAlignVertical="top"
+                  autoFocus
+                />
+                <TouchableOpacity
+                  style={[
+                    styles.feedSendButton,
+                    (!feedCommentText.trim() || feedSubmittingComment || feedCommentText.length > 500) && styles.feedSendButtonDisabled
+                  ]}
+                  onPress={() => handleFeedCommentSubmit(item)}
+                  disabled={!feedCommentText.trim() || feedSubmittingComment || feedCommentText.length > 500}
+                >
+                  {feedSubmittingComment ? (
+                    <ActivityIndicator size="small" color={colors.buttonText} />
+                  ) : (
+                    <Ionicons name="send" size={20} color={colors.buttonText} />
+                  )}
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.feedCharacterCount}>
+                {feedCommentText.length}/500
+              </Text>
+            </View>
+          )}
+
+          {/* Timestamp */}
+          <View style={styles.feedTimestampContainer}>
+            <Text style={styles.feedTimestamp}>
+              {formatTimestamp(item.createdAt)}
+            </Text>
+          </View>
+        </View>
           );
         })}
       </View>
@@ -397,6 +935,7 @@ const PublicProfileScreen = ({ route, navigation }) => {
       </View>
     );
   };
+
 
   if (loading) {
     return (
@@ -525,7 +1064,7 @@ const PublicProfileScreen = ({ route, navigation }) => {
           )}
         </View>
 
-        {/* Action Button */}
+        {/* Action Buttons */}
         {!isOwnProfile && (
           <View style={styles.actionButtonContainer}>
             <TouchableOpacity
@@ -535,6 +1074,17 @@ const PublicProfileScreen = ({ route, navigation }) => {
               <Text style={[styles.followButtonText, following && styles.followingButtonText]}>
                 {following ? 'Following' : 'Follow'}
               </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.messageButton}
+              onPress={() => {
+                navigation.navigate('Message', {
+                  userId: userId,
+                });
+              }}
+            >
+              <Ionicons name="mail-outline" size={20} color={colors.textWhite} />
+              <Text style={styles.messageButtonText}>Message</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -577,10 +1127,51 @@ const PublicProfileScreen = ({ route, navigation }) => {
               Rolls
             </Text>
           </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.viewModeButton, viewMode === 'feed' && styles.viewModeButtonActive]}
+            onPress={() => setViewMode('feed')}
+          >
+            <Ionicons
+              name={viewMode === 'feed' ? 'list' : 'list-outline'}
+              size={20}
+              color={viewMode === 'feed' ? colors.primary : colors.textSecondary}
+            />
+            <Text
+              style={[
+                styles.viewModeText,
+                viewMode === 'feed' && styles.viewModeTextActive,
+              ]}
+            >
+              Feed
+            </Text>
+          </TouchableOpacity>
         </View>
 
-        {/* Content Grid */}
-        {viewMode === 'photos' ? renderPhotoGrid() : renderRollsGrid()}
+        {/* Content */}
+        {/* Show locked message if private and not following, otherwise show content */}
+        {isProfilePrivate && !canViewPrivateProfile ? (
+          <View style={styles.lockedContentContainer}>
+            <Ionicons name="lock-closed" size={48} color={colors.textSecondary} />
+            <Text style={styles.lockedContentTitle}>This {viewMode === 'photos' ? 'photos' : viewMode === 'rolls' ? 'rolls' : 'feed'} is private</Text>
+            <Text style={styles.lockedContentText}>
+              Follow @{profile?.username || 'this user'} to see their {viewMode === 'photos' ? 'photos' : viewMode === 'rolls' ? 'rolls' : 'content'}
+            </Text>
+            {!following && (
+              <TouchableOpacity
+                style={styles.lockedFollowButton}
+                onPress={handleFollow}
+              >
+                <Text style={styles.lockedFollowButtonText}>Follow</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ) : (
+          <>
+            {viewMode === 'photos' && renderPhotoGrid()}
+            {viewMode === 'rolls' && renderRollsGrid()}
+            {viewMode === 'feed' && renderFeed()}
+          </>
+        )}
       </ScrollView>
     </View>
   );
@@ -619,6 +1210,9 @@ const styles = StyleSheet.create({
   scrollView: {
     flex: 1,
   },
+  feedContainer: {
+    flex: 1,
+  },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -639,6 +1233,67 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontSize: 18,
     color: colors.error,
+  },
+  lockedProfileContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+  },
+  lockedProfileTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: colors.textPrimary,
+    marginTop: 24,
+    marginBottom: 8,
+  },
+  lockedProfileText: {
+    fontSize: 16,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    marginBottom: 32,
+  },
+  followButton: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: 32,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  followButtonText: {
+    color: colors.textWhite,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  lockedContentContainer: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 300,
+  },
+  lockedContentTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: colors.textPrimary,
+    marginTop: 16,
+    marginBottom: 8,
+    textTransform: 'capitalize',
+  },
+  lockedContentText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  lockedFollowButton: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  lockedFollowButtonText: {
+    color: colors.textWhite,
+    fontSize: 14,
+    fontWeight: '600',
   },
   profileHeader: {
     flexDirection: 'row',
@@ -866,6 +1521,160 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: colors.textWhite,
+  },
+  // Feed view styles
+  feedListContent: {
+    paddingBottom: 20,
+  },
+  feedItem: {
+    backgroundColor: colors.background,
+    marginBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.inputBorder,
+  },
+  feedUserHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  feedAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginRight: 12,
+  },
+  feedAvatarPlaceholder: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.inputBackground,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  feedUserText: {
+    flex: 1,
+  },
+  feedUsername: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  feedImage: {
+    width: width,
+    height: width,
+    backgroundColor: colors.inputBackground,
+  },
+  feedCaptionContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  feedCaption: {
+    fontSize: 14,
+    color: colors.textPrimary,
+    lineHeight: 20,
+  },
+  feedCaptionUsername: {
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  feedActionsContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.inputBorder,
+  },
+  feedActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 24,
+  },
+  feedActionCount: {
+    marginLeft: 6,
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  feedCommentsDisplayContainer: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 8,
+  },
+  feedCommentDisplayItem: {
+    marginBottom: 12,
+  },
+  feedCommentDisplayUsername: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textPrimary,
+    marginBottom: 4,
+  },
+  feedCommentDisplayText: {
+    fontSize: 14,
+    color: colors.textPrimary,
+    lineHeight: 20,
+  },
+  feedViewMoreButton: {
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  feedViewMoreText: {
+    fontSize: 14,
+    color: colors.primary,
+    fontWeight: '600',
+  },
+  feedCommentInputSection: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.inputBorder,
+    backgroundColor: colors.background,
+  },
+  feedCommentInputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    marginBottom: 6,
+  },
+  feedCommentInput: {
+    flex: 1,
+    backgroundColor: colors.inputBackground,
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: colors.textPrimary,
+    maxHeight: 100,
+    minHeight: 40,
+    marginRight: 8,
+  },
+  feedCharacterCount: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    textAlign: 'right',
+    paddingRight: 4,
+  },
+  feedSendButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.buttonPrimary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  feedSendButtonDisabled: {
+    opacity: 0.5,
+  },
+  feedTimestampContainer: {
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  feedTimestamp: {
+    fontSize: 12,
+    color: colors.textSecondary,
   },
 });
 
