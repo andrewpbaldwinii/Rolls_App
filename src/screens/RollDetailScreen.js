@@ -25,6 +25,7 @@ import { setRollPublic } from '../services/publicProfile';
 import { uploadRollTitleImage } from '../services/storage';
 import { supabase } from '../lib/supabase';
 import colors from '../constants/colors';
+import OptimizedImage from '../components/OptimizedImage';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const GRID_COLUMNS = 3;
@@ -63,17 +64,19 @@ const RollDetailScreen = () => {
     return release > new Date();
   }, [roll]);
 
-  // Owners and contributors can always see images (even if locked)
-  // After development date: public rolls visible to all, private rolls only to contributors
+  // View permissions:
+  // - Owners and contributors can always see images (even if locked)
+  // - Public rolls: Anyone can view all photos (regardless of release_date)
+  // - Private rolls: Only owner/contributors can view (release_date still applies)
   const canViewImages = useMemo(() => {
     if (isOwner || isContributor) return true; // Owner/contributors always see
-    if (!isLocked) {
-      // After development date
-      if (roll?.is_public) return true; // Public roll - all users can view
-      return false; // Private roll - only contributors can view
-    }
-    return false; // Before development date - only owner/contributors
-  }, [isOwner, isContributor, isLocked, roll?.is_public]);
+    
+    // If roll is public, anyone can view (regardless of release_date)
+    if (roll?.is_public) return true;
+    
+    // Private rolls: only owner/contributors can view
+    return false;
+  }, [isOwner, isContributor, roll?.is_public]);
 
   const fetchData = useCallback(async () => {
     if (!rollId) {
@@ -87,6 +90,7 @@ const RollDetailScreen = () => {
       setError(null);
 
       // Fetch roll details (if not provided)
+      // Make sure to include is_public field
       if (!roll) {
         const { data, error: rollError } = await supabase
           .from('rolls')
@@ -95,6 +99,16 @@ const RollDetailScreen = () => {
           .single();
         if (rollError) throw rollError;
         setRoll(data);
+      } else if (!roll.hasOwnProperty('is_public')) {
+        // If initialRoll was passed but doesn't have is_public, fetch it
+        const { data, error: rollError } = await supabase
+          .from('rolls')
+          .select('is_public')
+          .eq('id', rollId)
+          .single();
+        if (!rollError && data) {
+          setRoll({ ...roll, is_public: data.is_public });
+        }
       }
 
       // Process title image URL - ensure it uses roll-title-images bucket (public)
@@ -371,7 +385,7 @@ const RollDetailScreen = () => {
           // Show image (owners/contributors can always see, others after release)
           // Only load if in visible set to prevent memory pool violations
           <View style={styles.imageContainer}>
-            <Image
+            <OptimizedImage
               source={{ 
                 uri: item.image_url,
                 // Limit image size to prevent memory issues
@@ -494,7 +508,7 @@ const RollDetailScreen = () => {
         {/* Title Image - from roll-title-images bucket (public) */}
         {titleImageUrl ? (
           <View style={styles.titleImageContainer}>
-            <Image 
+            <OptimizedImage 
               source={{ uri: titleImageUrl }}
               style={styles.titleImage}
               resizeMode="cover"
@@ -626,7 +640,7 @@ const RollDetailScreen = () => {
 
       <View style={styles.galleryHeader}>
         <Text style={styles.galleryTitle}>Photos</Text>
-        {isLocked ? (
+        {isLocked && !roll?.is_public ? (
           <View style={styles.lockBadge}>
             <Ionicons name="lock-closed" size={14} color={colors.textSecondary} />
             <Text style={styles.lockBadgeText}>
