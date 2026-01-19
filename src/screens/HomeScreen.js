@@ -16,6 +16,7 @@ import {
   Platform,
   ScrollView,
 } from 'react-native';
+import OptimizedImage from '../components/OptimizedImage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -126,6 +127,7 @@ const HomeScreen = () => {
       const result = await getNewsfeedItems({
         page,
         pageSize: PAGE_SIZE,
+        currentUserId: user?.id || null,
       });
 
       console.log(`✅ Newsfeed loaded: ${result.items.length} items, hasMore: ${result.hasMore}, total: ${result.totalCount}`);
@@ -394,10 +396,11 @@ const HomeScreen = () => {
             activeOpacity={0.7}
           >
             {item.avatarUrl ? (
-              <Image
+              <OptimizedImage
                 source={{ uri: item.avatarUrl }}
                 style={styles.avatar}
                 resizeMode="cover"
+                showLoadingIndicator={false}
               />
             ) : (
               <View style={styles.avatarPlaceholder}>

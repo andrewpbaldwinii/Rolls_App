@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { useAuth } from '../contexts/AuthContext';
+import OptimizedImage from '../components/OptimizedImage';
 import {
   getPublicProfile,
   getPublicRolls,
@@ -90,7 +91,11 @@ const PublicProfileScreen = ({ route, navigation }) => {
     try {
       setLoading(true);
       
-      // Load profile first (most critical)
+      // OPTIMIZED: Get current user once and reuse
+      const { data: { user: currentAuthUser } } = await supabase.auth.getUser();
+      const currentUserId = currentAuthUser?.id || null;
+      
+      // Load profile first (most critical) - now includes profile_is_public
       let profileData;
       try {
         profileData = await getPublicProfile(userId);
@@ -107,82 +112,78 @@ const PublicProfileScreen = ({ route, navigation }) => {
         return;
       }
 
-      // Check profile privacy and access
-      let canView = true;
+      // OPTIMIZED: Use profile_is_public from profile data (already loaded)
+      // Note: Profile header is always visible, only photos/rolls content is restricted
+      let canViewContent = true; // Can view photos/rolls grids
       let isPrivate = false;
       
       if (!isOwnProfile) {
-        const { data: userData, error: userDataError } = await supabase
-          .from('users')
-          .select('profile_is_public')
-          .eq('id', userId)
-          .single();
-
-        // Default to public if column doesn't exist or is null
-        // profile_is_public is TRUE by default, so if it's null/undefined, treat as public
-        const profileIsPublic = userData?.profile_is_public ?? true;
+        // profile_is_public is now included in profileData from getPublicProfile
+        const profileIsPublic = profileData?.profile_is_public ?? true;
         isPrivate = !profileIsPublic;
         setIsProfilePrivate(isPrivate);
 
-        if (isPrivate) {
-          // Check if current user is following
-          const { data: { user: currentUser } } = await supabase.auth.getUser();
-          if (currentUser) {
-            const { data: followData, error: followError } = await supabase
-              .from('follows')
-              .select('id')
-              .eq('follower_id', currentUser.id)
-              .eq('following_id', userId)
-              .single();
-            
-            // If table doesn't exist (PGRST205), treat as not following
-            if (followError && followError.code === 'PGRST205') {
-              canView = false;
-            } else {
-              canView = !!followData;
-            }
-          } else {
-            canView = false;
-          }
+        if (isPrivate && currentUserId) {
+          // Check if current user is following (run in parallel with other data)
+          // This will be checked in the Promise.all below
         }
       }
       
-      setCanViewPrivateProfile(canView);
-
-      // Get current user ID for passing to functions
-      const { data: { user: currentAuthUser } } = await supabase.auth.getUser();
-      const currentUserId = currentAuthUser?.id || null;
-
-      // Load other data in parallel (non-critical) - only if can view
-      const [rolls, photos, followStatus] = await Promise.allSettled([
-        canView ? getPublicRolls(userId, currentUserId) : Promise.resolve([]),
-        canView ? getPublicPhotos(userId, currentUserId) : Promise.resolve([]),
+      // OPTIMIZED: Load all data in parallel - profile privacy check is already done
+      // Photos/rolls only loaded if can view content (for private profiles)
+      // Follow status always checked (so follow button works)
+      const [rolls, photos, followStatus, followCheckResult] = await Promise.allSettled([
+        // Only load if public or own profile (will check canViewContent after follow check)
+        getPublicRolls(userId, currentUserId).catch(() => []),
+        getPublicPhotos(userId, currentUserId).catch(() => []),
         !isOwnProfile ? isFollowing(userId) : Promise.resolve(false),
+        // Check follow status for private profiles
+        (isPrivate && currentUserId && !isOwnProfile) 
+          ? supabase
+              .from('follows')
+              .select('id')
+              .eq('follower_id', currentUserId)
+              .eq('following_id', userId)
+              .single()
+          : Promise.resolve({ data: null }),
       ]);
 
-      const loadedRolls = rolls.status === 'fulfilled' ? rolls.value : [];
-      setPublicRolls(loadedRolls);
-
-      // Process title image URLs for rolls (roll-title-images bucket - public)
-      const titleImageUrlMap = {};
-      await Promise.all(
-        loadedRolls.map(async (roll) => {
-          if (roll.title_image_url) {
-            try {
-              const processedUrl = await getRollImageUrlAsync(roll.title_image_url, 'title');
-              titleImageUrlMap[roll.id] = processedUrl || roll.title_image_url;
-            } catch (err) {
-              console.warn(`Error processing title image for roll ${roll.id}:`, err);
-              titleImageUrlMap[roll.id] = roll.title_image_url;
-            }
+      // Determine if can view content based on follow check for private profiles
+      if (isPrivate && !isOwnProfile) {
+        if (followCheckResult.status === 'fulfilled') {
+          const { data: followData, error: followError } = followCheckResult.value;
+          // If table doesn't exist (PGRST205), treat as not following
+          if (followError && followError.code === 'PGRST205') {
+            canViewContent = false;
+          } else {
+            canViewContent = !!followData;
           }
-        })
-      );
-      setRollTitleImageUrls(titleImageUrlMap);
+        } else {
+          canViewContent = false;
+        }
+      }
+      
+      setCanViewPrivateProfile(canViewContent);
 
-      const loadedPhotos = photos.status === 'fulfilled' ? photos.value : [];
+      // Filter rolls/photos based on canViewContent
+      const loadedRolls = (canViewContent && rolls.status === 'fulfilled') ? rolls.value : [];
+      const loadedPhotos = (canViewContent && photos.status === 'fulfilled') ? photos.value : [];
+      
+      setPublicRolls(loadedRolls);
       setPublicPhotos(loadedPhotos);
       setFollowing(followStatus.status === 'fulfilled' ? followStatus.value : false);
+
+      // OPTIMIZED: Title image URLs are now pre-processed in getPublicRolls
+      // Set them immediately so images can start loading right away
+      if (loadedRolls.length > 0) {
+        const titleImageUrlMap = {};
+        loadedRolls.forEach(roll => {
+          if (roll.title_image_url) {
+            titleImageUrlMap[roll.id] = roll.title_image_url;
+          }
+        });
+        setRollTitleImageUrls(titleImageUrlMap);
+      }
       
       // Prepare feed items from photos (newsfeed style) - sorted by created_at descending
       if (loadedPhotos.length > 0) {
@@ -602,9 +603,10 @@ const PublicProfileScreen = ({ route, navigation }) => {
   const renderProfileImage = () => {
     if (profile?.avatar_url) {
       return (
-        <Image
+        <OptimizedImage
           source={{ uri: profile.avatar_url }}
           style={styles.profileImage}
+          showLoadingIndicator={false}
         />
       );
     }
@@ -662,7 +664,7 @@ const PublicProfileScreen = ({ route, navigation }) => {
                 });
               }}
             >
-              <Image
+              <OptimizedImage
                 source={{ uri: photo.image_url }}
                 style={styles.gridImage}
                 resizeMode="cover"
@@ -693,10 +695,11 @@ const PublicProfileScreen = ({ route, navigation }) => {
           {/* User Header */}
           <View style={styles.feedUserHeader}>
             {item.avatarUrl ? (
-              <Image
+              <OptimizedImage
                 source={{ uri: item.avatarUrl }}
                 style={styles.feedAvatar}
                 resizeMode="cover"
+                showLoadingIndicator={false}
               />
             ) : (
               <View style={styles.feedAvatarPlaceholder}>
@@ -722,7 +725,7 @@ const PublicProfileScreen = ({ route, navigation }) => {
               });
             }}
           >
-            <Image
+            <OptimizedImage
               source={{ uri: item.imageUrl }}
               style={styles.feedImage}
               resizeMode="cover"
@@ -914,7 +917,7 @@ const PublicProfileScreen = ({ route, navigation }) => {
               activeOpacity={0.8}
             >
               {rollTitleImageUrls[roll.id] || roll.title_image_url ? (
-                <Image 
+                <OptimizedImage 
                   source={{ uri: rollTitleImageUrls[roll.id] || roll.title_image_url }} 
                   style={styles.rollGridImage}
                   resizeMode="cover"
@@ -1149,6 +1152,7 @@ const PublicProfileScreen = ({ route, navigation }) => {
 
         {/* Content */}
         {/* Show locked message if private and not following, otherwise show content */}
+        {/* Profile header above is always visible - only content grids are restricted */}
         {isProfilePrivate && !canViewPrivateProfile ? (
           <View style={styles.lockedContentContainer}>
             <Ionicons name="lock-closed" size={48} color={colors.textSecondary} />
@@ -1167,8 +1171,18 @@ const PublicProfileScreen = ({ route, navigation }) => {
           </View>
         ) : (
           <>
-            {viewMode === 'photos' && renderPhotoGrid()}
-            {viewMode === 'rolls' && renderRollsGrid()}
+            {viewMode === 'photos' && (publicPhotos.length > 0 ? renderPhotoGrid() : (
+              <View style={styles.emptyState}>
+                <Ionicons name="images-outline" size={64} color={colors.textSecondary} />
+                <Text style={styles.emptyText}>No public photos yet</Text>
+              </View>
+            ))}
+            {viewMode === 'rolls' && (publicRolls.length > 0 ? renderRollsGrid() : (
+              <View style={styles.emptyState}>
+                <Ionicons name="camera-outline" size={64} color={colors.textSecondary} />
+                <Text style={styles.emptyText}>No public rolls yet</Text>
+              </View>
+            ))}
             {viewMode === 'feed' && renderFeed()}
           </>
         )}

@@ -1,22 +1,62 @@
 import { supabase } from '../lib/supabase';
 
+// Profile data cache to reduce redundant queries
+// Format: { userId: { data: profileData, expiresAt: timestamp } }
+const profileCache = new Map();
+const CACHE_DURATION = 30 * 1000; // 30 seconds cache duration
+
+/**
+ * Clear expired cache entries
+ */
+const cleanupProfileCache = () => {
+  const now = Date.now();
+  for (const [key, value] of profileCache.entries()) {
+    if (value.expiresAt < now) {
+      profileCache.delete(key);
+    }
+  }
+};
+
 /**
  * Get public profile data for a user
  * @param {string} userId - User ID
+ * @param {boolean} forceRefresh - Force refresh even if cached
  * @returns {Promise<Object>} Profile data with stats
  */
-export const getPublicProfile = async (userId) => {
+export const getPublicProfile = async (userId, forceRefresh = false) => {
+  // Check cache first
+  if (!forceRefresh) {
+    cleanupProfileCache();
+    const cached = profileCache.get(userId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data;
+    }
+  }
   try {
-    // Get user profile - try with email first, fallback without if column doesn't exist
+    // OPTIMIZED: Get profile with email in one query (try with email, fallback without)
     let profileQuery = supabase
       .from('users')
-      .select('id, username, display_name, avatar_url, bio')
+      .select('id, username, display_name, avatar_url, bio, email, profile_is_public')
       .eq('id', userId)
       .single();
 
     const { data: profile, error: profileError } = await profileQuery;
 
-    if (profileError) {
+    // If email column doesn't exist, try without it
+    if (profileError && profileError.code === 'PGRST116') {
+      profileQuery = supabase
+        .from('users')
+        .select('id, username, display_name, avatar_url, bio, profile_is_public')
+        .eq('id', userId)
+        .single();
+      
+      const { data: profileData, error: profileError2 } = await profileQuery;
+      if (profileError2) {
+        console.error('Error fetching user profile:', profileError2);
+        throw profileError2;
+      }
+      profile = { ...profileData, email: null };
+    } else if (profileError) {
       console.error('Error fetching user profile:', profileError);
       throw profileError;
     }
@@ -25,102 +65,118 @@ export const getPublicProfile = async (userId) => {
       throw new Error('Profile not found');
     }
 
-    // Try to get email separately (in case column doesn't exist)
-    let email = null;
-    try {
-      const { data: emailData, error: emailError } = await supabase
-        .from('users')
-        .select('email')
-        .eq('id', userId)
-        .single();
-      
-      if (!emailError && emailData) {
-        email = emailData.email;
-      }
-    } catch (e) {
-      console.log('Email column may not exist, skipping:', e.message);
-    }
+    const email = profile.email || null;
 
-    // Calculate stats directly from database queries
+    // OPTIMIZED: Run all stats queries in parallel for better performance
     let stats = { rolls_created: 0, photos_taken: 0, followers_count: 0 };
     
     try {
-      // Try RPC function first (if it exists)
-      const { data: statsData, error: statsError } = await supabase
-        .rpc('get_user_public_stats', { user_uuid: userId });
-
-      if (!statsError && statsData && statsData[0]) {
-        stats = statsData[0];
-      } else {
-        // Fallback: Calculate stats directly from database
-        console.log('Stats function not available, calculating directly from database...');
-        
-        // Count rolls created by this user
-        const { count: rollsCount, error: rollsError } = await supabase
+      // Run all count queries in parallel
+      const [rollsResult, photosFunctionResult, followersResult] = await Promise.allSettled([
+        // Count rolls
+        supabase
           .from('rolls')
           .select('*', { count: 'exact', head: true })
-          .eq('creator_id', userId);
+          .eq('creator_id', userId),
         
+        // Try photos count function first (fastest)
+        supabase.rpc('count_user_photos', { p_user_id: userId }),
+        
+        // Count followers
+        supabase
+          .from('follows')
+          .select('*', { count: 'exact', head: true })
+          .eq('following_id', userId),
+      ]);
+
+      // Process rolls count
+      if (rollsResult.status === 'fulfilled') {
+        const { count: rollsCount, error: rollsError } = rollsResult.value;
         if (!rollsError && rollsCount !== null) {
           stats.rolls_created = rollsCount;
         }
+      }
 
-        // Count photos taken by this user (all photos, not just public)
-        // Exclude title images - they're separate and stored in rolls.title_image_url
-        const { count: photosCount, error: photosError } = await supabase
-          .from('roll_images')
-          .select('*', { count: 'exact', head: true })
-          .eq('contributor_id', userId)
-          .neq('caption', '__title_image__');
-        
-        if (!photosError && photosCount !== null) {
+      // Process photos count
+      if (photosFunctionResult.status === 'fulfilled') {
+        const { data: photosCount, error: functionError } = photosFunctionResult.value;
+        if (!functionError && photosCount !== null && photosCount !== undefined) {
           stats.photos_taken = photosCount;
-        }
+        } else {
+          // Fallback: Try direct queries in parallel
+          const [rollPhotosResult, profilePhotosResult] = await Promise.allSettled([
+            supabase
+              .from('roll_images')
+              .select('*', { count: 'exact', head: true })
+              .eq('contributor_id', userId)
+              .neq('caption', '__title_image__'),
+            supabase
+              .from('public_profile_photos')
+              .select('*', { count: 'exact', head: true })
+              .eq('user_id', userId),
+          ]);
 
-        // Count followers (if follows table exists)
-        try {
-          const { count: followersCount, error: followersError } = await supabase
-            .from('follows')
-            .select('*', { count: 'exact', head: true })
-            .eq('following_id', userId);
-          
-          if (!followersError && followersCount !== null) {
-            stats.followers_count = followersCount;
+          let rollPhotosCount = 0;
+          let profilePhotosCount = 0;
+
+          if (rollPhotosResult.status === 'fulfilled') {
+            const { count, error } = rollPhotosResult.value;
+            if (!error && count !== null) {
+              rollPhotosCount = count;
+            }
           }
-        } catch (followError) {
-          console.log('Follows table may not exist, skipping followers count:', followError.message);
+
+          if (profilePhotosResult.status === 'fulfilled') {
+            const { count, error } = profilePhotosResult.value;
+            if (!error && count !== null) {
+              profilePhotosCount = count;
+            }
+          }
+
+          stats.photos_taken = rollPhotosCount + profilePhotosCount;
+        }
+      }
+
+      // Process followers count
+      if (followersResult.status === 'fulfilled') {
+        const { count: followersCount, error: followersError } = followersResult.value;
+        if (!followersError && followersCount !== null) {
+          stats.followers_count = followersCount;
         }
       }
     } catch (e) {
-      console.log('Error fetching stats, using defaults:', e.message);
-      // Try direct calculation as fallback
-      try {
-        const { count: rollsCount } = await supabase
-          .from('rolls')
-          .select('*', { count: 'exact', head: true })
-          .eq('creator_id', userId);
-        if (rollsCount !== null) stats.rolls_created = rollsCount;
-
-        // Exclude title images - they're separate and stored in rolls.title_image_url
-        const { count: photosCount } = await supabase
-          .from('roll_images')
-          .select('*', { count: 'exact', head: true })
-          .eq('contributor_id', userId)
-          .neq('caption', '__title_image__');
-        if (photosCount !== null) stats.photos_taken = photosCount;
-      } catch (fallbackError) {
-        console.log('Fallback stats calculation failed:', fallbackError.message);
-      }
+      console.error('Error fetching stats:', e.message);
+      // Stats are non-critical, continue with defaults
     }
 
-    return {
+    const profileData = {
       ...profile,
       email,
       stats,
     };
+
+    // Cache the result
+    profileCache.set(userId, {
+      data: profileData,
+      expiresAt: Date.now() + CACHE_DURATION,
+    });
+
+    return profileData;
   } catch (error) {
     console.error('Error fetching public profile:', error);
     throw error;
+  }
+};
+
+/**
+ * Clear profile cache for a specific user or all users
+ * @param {string} userId - Optional user ID to clear, or null to clear all
+ */
+export const clearProfileCache = (userId = null) => {
+  if (userId) {
+    profileCache.delete(userId);
+  } else {
+    profileCache.clear();
   }
 };
 
@@ -133,11 +189,51 @@ export const getPublicProfile = async (userId) => {
  * 
  * Excludes "Profile Photos" rolls - these are system rolls that shouldn't appear in the Rolls tab.
  * 
+ * If profile is private, only returns rolls if currentUserId is following the user.
+ * 
  * @param {string} userId - User ID
+ * @param {string} currentUserId - Current viewing user ID (optional, for privacy check)
  * @returns {Promise<Array>} Array of public rolls (excluding Profile Photos)
  */
-export const getPublicRolls = async (userId) => {
+export const getPublicRolls = async (userId, currentUserId = null) => {
   try {
+    // Check if profile is private
+    // Default to public if column doesn't exist or is null
+    const { data: userData } = await supabase
+      .from('users')
+      .select('profile_is_public')
+      .eq('id', userId)
+      .single();
+
+    // profile_is_public defaults to TRUE, so if null/undefined, treat as public
+    const profileIsPublic = userData?.profile_is_public ?? true;
+    const isPrivate = !profileIsPublic;
+
+    if (isPrivate && currentUserId !== userId) {
+      // Profile is private - check if current user is following
+      if (currentUserId) {
+        const { data: followData, error: followError } = await supabase
+          .from('follows')
+          .select('id')
+          .eq('follower_id', currentUserId)
+          .eq('following_id', userId)
+          .single();
+
+        // If table doesn't exist (PGRST205), treat as not following
+        if (followError && followError.code === 'PGRST205') {
+          return [];
+        }
+
+        if (!followData) {
+          // Not following - return empty array
+          return [];
+        }
+      } else {
+        // Not logged in - return empty array
+        return [];
+      }
+    }
+
     // Get all public rolls (regardless of release_date)
     // release_date only affects photo visibility, not roll visibility on profile
     // Exclude "Profile Photos" rolls - these are system rolls for standalone photos
@@ -155,6 +251,28 @@ export const getPublicRolls = async (userId) => {
       roll => roll.title?.toLowerCase() !== 'profile photos'
     );
     
+    // OPTIMIZED: Pre-process title image URLs in parallel for faster loading
+    // Title images are public, so we can process them immediately
+    if (filteredRolls.length > 0) {
+      const { getRollImageUrlAsync } = await import('./storage');
+      await Promise.all(
+        filteredRolls.map(async (roll) => {
+          if (roll.title_image_url) {
+            try {
+              // Process title image URL - this is fast since title images are public
+              const processedUrl = await getRollImageUrlAsync(roll.title_image_url, 'title');
+              if (processedUrl && processedUrl !== roll.title_image_url) {
+                roll.title_image_url = processedUrl;
+              }
+            } catch (err) {
+              // Keep original URL on error
+              console.warn(`Error pre-processing title image for roll ${roll.id}:`, err);
+            }
+          }
+        })
+      );
+    }
+    
     return filteredRolls;
   } catch (error) {
     console.error('Error fetching public rolls:', error);
@@ -167,11 +285,51 @@ export const getPublicRolls = async (userId) => {
  * Includes both:
  * 1. Standalone public profile photos (from public_profile_photos table)
  * 2. Photos from public rolls where the roll's release_date has passed
+ * 
+ * If profile is private, only returns photos if currentUserId is following the user.
  * @param {string} userId - User ID
+ * @param {string} currentUserId - Current viewing user ID (optional, for privacy check)
  * @returns {Promise<Array>} Array of public photos
  */
-export const getPublicPhotos = async (userId) => {
+export const getPublicPhotos = async (userId, currentUserId = null) => {
   try {
+    // Check if profile is private
+    // Default to public if column doesn't exist or is null
+    const { data: userData } = await supabase
+      .from('users')
+      .select('profile_is_public')
+      .eq('id', userId)
+      .single();
+
+    // profile_is_public defaults to TRUE, so if null/undefined, treat as public
+    const profileIsPublic = userData?.profile_is_public ?? true;
+    const isPrivate = !profileIsPublic;
+
+    if (isPrivate && currentUserId !== userId) {
+      // Profile is private - check if current user is following
+      if (currentUserId) {
+        const { data: followData, error: followError } = await supabase
+          .from('follows')
+          .select('id')
+          .eq('follower_id', currentUserId)
+          .eq('following_id', userId)
+          .single();
+
+        // If table doesn't exist (PGRST205), treat as not following
+        if (followError && followError.code === 'PGRST205') {
+          return [];
+        }
+
+        if (!followData) {
+          // Not following - return empty array
+          return [];
+        }
+      } else {
+        // Not logged in - return empty array
+        return [];
+      }
+    }
+
     const now = new Date().toISOString();
     
     // Get standalone public profile photos (not attached to any roll)
@@ -565,14 +723,51 @@ export const followUser = async (userId) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error('User not authenticated');
 
+    // Check if already following to avoid duplicate key errors
+    const { data: existing, error: checkError } = await supabase
+      .from('follows')
+      .select('id')
+      .eq('follower_id', user.id)
+      .eq('following_id', userId)
+      .single();
+
+    // PGRST205 = table doesn't exist
+    if (checkError && checkError.code === 'PGRST205') {
+      throw new Error('Follows feature is not available. Please run PUBLIC_PROFILE_SETUP.sql in Supabase to enable following.');
+    }
+
+    if (existing) {
+      // Already following, return silently
+      return;
+    }
+
     const { error } = await supabase
       .from('follows')
       .insert([{ follower_id: user.id, following_id: userId }]);
 
-    if (error) throw error;
+    if (error) {
+      // PGRST205 = table doesn't exist
+      if (error.code === 'PGRST205') {
+        throw new Error('Follows feature is not available. Please run PUBLIC_PROFILE_SETUP.sql in Supabase to enable following.');
+      }
+      // Handle duplicate key error gracefully
+      if (error.code === '23505' || error.message?.includes('duplicate') || error.message?.includes('unique')) {
+        // Already following, this is OK
+        return;
+      }
+      throw error;
+    }
   } catch (error) {
     console.error('Error following user:', error);
-    throw error;
+    // Re-throw with a more user-friendly message
+    if (error.code === '23505' || error.message?.includes('duplicate') || error.message?.includes('unique')) {
+      // Already following, this is OK
+      return;
+    }
+    if (error.code === 'PGRST205') {
+      throw new Error('Follows feature is not available. Please run PUBLIC_PROFILE_SETUP.sql in Supabase to enable following.');
+    }
+    throw new Error(error.message || 'Failed to follow user. Please try again.');
   }
 };
 
@@ -592,9 +787,18 @@ export const unfollowUser = async (userId) => {
       .eq('follower_id', user.id)
       .eq('following_id', userId);
 
-    if (error) throw error;
+    if (error) {
+      // PGRST205 = table doesn't exist
+      if (error.code === 'PGRST205') {
+        throw new Error('Follows feature is not available. Please run PUBLIC_PROFILE_SETUP.sql in Supabase to enable following.');
+      }
+      throw error;
+    }
   } catch (error) {
     console.error('Error unfollowing user:', error);
+    if (error.code === 'PGRST205') {
+      throw new Error('Follows feature is not available. Please run PUBLIC_PROFILE_SETUP.sql in Supabase to enable following.');
+    }
     throw error;
   }
 };
@@ -616,10 +820,29 @@ export const isFollowing = async (userId) => {
       .eq('following_id', userId)
       .single();
 
-    if (error && error.code !== 'PGRST116') throw error; // PGRST116 = no rows returned
+    // PGRST116 = no rows returned (not an error, just means not following)
+    // PGRST205 = table doesn't exist (follows table not created yet)
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return false; // Not following
+      }
+      if (error.code === 'PGRST205') {
+        // Table doesn't exist - return false as safe default
+        console.warn('Follows table does not exist. Please run PUBLIC_PROFILE_SETUP.sql in Supabase.');
+        return false;
+      }
+      // Log other errors but don't throw - return false as safe default
+      console.warn('Error checking follow status (non-critical):', error.code || error.message);
+      return false;
+    }
     return !!data;
   } catch (error) {
-    console.error('Error checking follow status:', error);
+    // Catch any unexpected errors and return false as safe default
+    if (error.code === 'PGRST205') {
+      console.warn('Follows table does not exist. Please run PUBLIC_PROFILE_SETUP.sql in Supabase.');
+      return false;
+    }
+    console.warn('Error checking follow status (non-critical):', error.message || error);
     return false;
   }
 };

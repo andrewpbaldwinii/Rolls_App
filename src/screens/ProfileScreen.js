@@ -12,13 +12,15 @@ import {
   Dimensions,
   FlatList,
   RefreshControl,
+  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import { getUserPhotos } from '../services/publicProfile';
+import { getUserPhotos, getPublicProfile } from '../services/publicProfile';
 import colors from '../constants/colors';
+import OptimizedImage from '../components/OptimizedImage';
 
 const { width } = Dimensions.get('window');
 const GRID_SIZE = (width - 60) / 3; // 3 columns with margins
@@ -34,8 +36,11 @@ const ProfileScreen = ({ navigation }) => {
   const [userPhotos, setUserPhotos] = useState([]);
   const [loadingPhotos, setLoadingPhotos] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [stats, setStats] = useState({ rolls_created: 0, photos_taken: 0, followers_count: 0 });
+  const [profileIsPublic, setProfileIsPublic] = useState(true);
+  const [updatingProfilePrivacy, setUpdatingProfilePrivacy] = useState(false);
 
-  // Fetch user profile from public.users table
+  // Fetch user profile from public.users table with stats
   const fetchUserProfile = async () => {
     if (!user?.id) {
       setLoadingProfile(false);
@@ -43,21 +48,38 @@ const ProfileScreen = ({ navigation }) => {
     }
 
     try {
-      const { data, error } = await supabase
-        .from('users')
-        .select('username, display_name, email, avatar_url')
-        .eq('id', user.id)
-        .single();
-
-      if (error) {
-        console.error('Error fetching user profile:', error);
-        // Fallback to email-based values if profile doesn't exist
+      // Use getPublicProfile to get profile with accurate stats
+      const profileData = await getPublicProfile(user.id);
+      
+      if (profileData) {
         setUserProfile({
-          username: user.email?.split('@')[0] || 'user',
-          display_name: user.email?.split('@')[0] || 'User',
+          username: profileData.username,
+          display_name: profileData.display_name,
+          email: profileData.email,
+          avatar_url: profileData.avatar_url,
         });
+        
+        // Set stats from the profile data
+        if (profileData.stats) {
+          setStats(profileData.stats);
+        }
       } else {
-        setUserProfile(data);
+        // Fallback to basic query if getPublicProfile fails
+        const { data, error } = await supabase
+          .from('users')
+          .select('username, display_name, email, avatar_url')
+          .eq('id', user.id)
+          .single();
+
+        if (error) {
+          console.error('Error fetching user profile:', error);
+          setUserProfile({
+            username: user.email?.split('@')[0] || 'user',
+            display_name: user.email?.split('@')[0] || 'User',
+          });
+        } else {
+          setUserProfile(data);
+        }
       }
     } catch (error) {
       console.error('Error fetching profile:', error);
@@ -70,8 +92,32 @@ const ProfileScreen = ({ navigation }) => {
     }
   };
 
+  // Fetch profile privacy setting
+  const fetchProfilePrivacy = async () => {
+    if (!user?.id) return;
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('profile_is_public')
+        .eq('id', user.id)
+        .single();
+      
+      if (error) {
+        console.warn('Error fetching profile privacy (column may not exist):', error);
+        // Default to public if column doesn't exist yet
+        setProfileIsPublic(true);
+      } else {
+        setProfileIsPublic(data?.profile_is_public ?? true);
+      }
+    } catch (err) {
+      console.warn('Error fetching profile privacy:', err);
+      setProfileIsPublic(true); // Default to public
+    }
+  };
+
   useEffect(() => {
     fetchUserProfile();
+    fetchProfilePrivacy();
   }, [user?.id]);
 
   // Fetch user photos
@@ -102,7 +148,7 @@ const ProfileScreen = ({ navigation }) => {
   const onRefresh = async () => {
     setRefreshing(true);
     try {
-      // Refresh both profile and photos
+      // Refresh profile (which includes stats), and photos
       await Promise.all([
         fetchUserProfile(),
         fetchUserPhotos(),
@@ -141,12 +187,45 @@ const ProfileScreen = ({ navigation }) => {
   };
   const initials = getInitials(displayName);
 
-  // Calculate stats from actual data
-  const stats = {
-    rollsCreated: 0, // TODO: Fetch from rolls
-    photosTaken: userPhotos?.length || 0,
-    memoriesShared: userPhotos?.filter(p => p.rolls?.is_public).length || 0,
+  // Toggle profile privacy
+  const handleToggleProfilePrivacy = async (value) => {
+    setUpdatingProfilePrivacy(true);
+    try {
+      const { error } = await supabase
+        .from('users')
+        .update({ profile_is_public: value })
+        .eq('id', user.id);
+      
+      if (error) {
+        // Check if column doesn't exist
+        if (error.message?.includes('profile_is_public') || error.code === '42703') {
+          Alert.alert(
+            'Database Update Required',
+            'The profile privacy feature requires a database update.\n\n' +
+            'Please run ADD_PROFILE_PRIVACY.sql in Supabase SQL Editor.'
+          );
+          return;
+        }
+        throw error;
+      }
+      
+      setProfileIsPublic(value);
+      Alert.alert(
+        'Success',
+        value 
+          ? 'Your profile is now public. Anyone can view your photos and rolls.' 
+          : 'Your profile is now private. Only followers can view your content.'
+      );
+    } catch (error) {
+      console.error('Error updating profile privacy:', error);
+      Alert.alert('Error', error.message || 'Failed to update profile privacy');
+    } finally {
+      setUpdatingProfilePrivacy(false);
+    }
   };
+
+  // Stats are now fetched from getPublicProfile and stored in state
+  // They will be displayed directly from the stats state
 
   const SettingItem = ({ icon, label, onPress, rightElement }) => (
     <TouchableOpacity
@@ -191,10 +270,11 @@ const ProfileScreen = ({ navigation }) => {
           {/* Profile Picture */}
           <View style={styles.profilePictureContainer}>
             {userProfile?.avatar_url ? (
-              <Image
+              <OptimizedImage
                 source={{ uri: userProfile.avatar_url }}
                 style={styles.profilePicture}
                 resizeMode="cover"
+                showLoadingIndicator={false}
               />
             ) : (
               <View style={styles.profilePicture}>
@@ -210,16 +290,16 @@ const ProfileScreen = ({ navigation }) => {
           {/* Stats Row */}
           <View style={styles.statsRow}>
             <View style={styles.statItem}>
-              <Text style={styles.statNumber}>{stats.rollsCreated}</Text>
+              <Text style={styles.statNumber}>{stats.rolls_created || 0}</Text>
               <Text style={styles.statLabel}>Rolls Created</Text>
             </View>
             <View style={styles.statItem}>
-              <Text style={styles.statNumber}>{stats.photosTaken}</Text>
+              <Text style={styles.statNumber}>{stats.photos_taken || 0}</Text>
               <Text style={styles.statLabel}>Photos Taken</Text>
             </View>
             <View style={styles.statItem}>
-              <Text style={styles.statNumber}>{stats.memoriesShared}</Text>
-              <Text style={styles.statLabel}>Memories Shared</Text>
+              <Text style={styles.statNumber}>{stats.followers_count || 0}</Text>
+              <Text style={styles.statLabel}>Followers</Text>
             </View>
           </View>
         </View>
@@ -242,6 +322,31 @@ const ProfileScreen = ({ navigation }) => {
             label="Privacy Settings"
             onPress={() => console.log('Privacy Settings')}
           />
+          <View style={styles.settingItem}>
+            <View style={styles.settingItemLeft}>
+              <Ionicons
+                name={profileIsPublic ? "globe-outline" : "lock-closed-outline"}
+                size={20}
+                color={colors.textPrimary}
+                style={styles.settingIcon}
+              />
+              <View style={styles.settingLabelContainer}>
+                <Text style={styles.settingLabel}>Public Profile</Text>
+                <Text style={styles.settingSubtext}>
+                  {profileIsPublic 
+                    ? 'Anyone can view your profile' 
+                    : 'Only followers can view your profile'}
+                </Text>
+              </View>
+            </View>
+            <Switch
+              value={profileIsPublic}
+              onValueChange={handleToggleProfilePrivacy}
+              disabled={updatingProfilePrivacy}
+              trackColor={{ false: colors.inputBorder, true: colors.primary }}
+              thumbColor={colors.textWhite}
+            />
+          </View>
           <View style={styles.settingItem}>
             <View style={styles.settingItemLeft}>
               <Ionicons
@@ -305,7 +410,7 @@ const ProfileScreen = ({ navigation }) => {
                     console.log('Photo tapped:', photo.id);
                   }}
                 >
-                  <Image
+                  <OptimizedImage
                     source={{ uri: photo.image_url }}
                     style={styles.photoGridImage}
                     resizeMode="cover"

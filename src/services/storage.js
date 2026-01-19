@@ -1,6 +1,101 @@
 import { supabase } from '../lib/supabase';
 import ImageResizer from 'react-native-image-resizer';
 
+// URL Cache to avoid regenerating signed URLs unnecessarily
+// Format: { cacheKey: { url: string, expiresAt: number } }
+const urlCache = new Map();
+const CACHE_BUFFER_TIME = 5 * 60 * 1000; // 5 minutes before expiry to regenerate
+const MAX_CACHE_SIZE = 500; // Limit cache size to prevent memory issues
+
+/**
+ * Extract expiry timestamp from a signed URL
+ * Supabase signed URLs have format: ...?token=...&expiresAt=1234567890
+ */
+const getExpiryFromSignedUrl = (signedUrl) => {
+  try {
+    const url = new URL(signedUrl);
+    const expiresAt = url.searchParams.get('expiresAt');
+    return expiresAt ? parseInt(expiresAt, 10) * 1000 : null; // Convert to milliseconds
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Check if a signed URL is still valid (not expired or about to expire)
+ */
+const isSignedUrlValid = (signedUrl) => {
+  if (!signedUrl || !signedUrl.includes('/storage/v1/object/sign/')) {
+    return false;
+  }
+  
+  const expiresAt = getExpiryFromSignedUrl(signedUrl);
+  if (!expiresAt) {
+    return false; // Can't determine expiry, assume invalid
+  }
+  
+  const now = Date.now();
+  const timeUntilExpiry = expiresAt - now;
+  
+  // Valid if not expired and has more than 5 minutes left
+  return timeUntilExpiry > CACHE_BUFFER_TIME;
+};
+
+/**
+ * Get cache key from image URL and bucket type
+ */
+const getCacheKey = (imageUrl, bucketType) => {
+  // Extract path from URL for consistent caching
+  let path = null;
+  
+  if (imageUrl.includes('roll-images/')) {
+    if (imageUrl.includes('/storage/v1/object/public/roll-images/')) {
+      path = imageUrl.split('/storage/v1/object/public/roll-images/')[1]?.split('?')[0];
+    } else if (imageUrl.includes('/storage/v1/object/sign/roll-images/')) {
+      const match = imageUrl.match(/\/storage\/v1\/object\/sign\/roll-images\/(.+?)(\?|$)/);
+      path = match ? decodeURIComponent(match[1]) : null;
+    } else if (imageUrl.includes('roll-images/')) {
+      path = imageUrl.split('roll-images/')[1]?.split('?')[0];
+    }
+  } else if (imageUrl.includes('roll-title-images/')) {
+    if (imageUrl.includes('/storage/v1/object/public/roll-title-images/')) {
+      path = imageUrl.split('/storage/v1/object/public/roll-title-images/')[1]?.split('?')[0];
+    } else if (imageUrl.includes('roll-title-images/')) {
+      path = imageUrl.split('roll-title-images/')[1]?.split('?')[0];
+    }
+  }
+  
+  return path ? `${bucketType || 'roll'}:${path}` : `${bucketType || 'roll'}:${imageUrl}`;
+};
+
+/**
+ * Clean up old cache entries to prevent memory issues
+ */
+const cleanupCache = () => {
+  if (urlCache.size <= MAX_CACHE_SIZE) return;
+  
+  const now = Date.now();
+  const entriesToDelete = [];
+  
+  // Remove expired entries first
+  for (const [key, value] of urlCache.entries()) {
+    if (value.expiresAt && value.expiresAt < now) {
+      entriesToDelete.push(key);
+    }
+  }
+  
+  entriesToDelete.forEach(key => urlCache.delete(key));
+  
+  // If still too large, remove oldest entries
+  if (urlCache.size > MAX_CACHE_SIZE) {
+    const sortedEntries = Array.from(urlCache.entries())
+      .sort((a, b) => (a[1].expiresAt || 0) - (b[1].expiresAt || 0));
+    
+    const toRemove = sortedEntries.slice(0, urlCache.size - MAX_CACHE_SIZE);
+    toRemove.forEach(([key]) => urlCache.delete(key));
+  }
+};
+
 /**
  * Upload an image to Supabase Storage for a Roll
  * @param {string} rollId - The Roll ID
@@ -412,9 +507,14 @@ export const getRollImageUrlAsync = async (imageUrl, bucketType = null) => {
   
   // Title images (roll-title-images bucket - always public)
   if (isTitleImage) {
-    // Title images are in public bucket, use public URLs
+    // OPTIMIZED: Title images are public, so if already a valid URL, return immediately
     if (imageUrl.includes('/storage/v1/object/public/roll-title-images/')) {
-      return imageUrl; // Already a valid public URL
+      return imageUrl; // Already a valid public URL - no processing needed
+    }
+    
+    // If it's already a full HTTPS URL, return it (likely already processed)
+    if (imageUrl.startsWith('https://') && imageUrl.includes('roll-title-images')) {
+      return imageUrl;
     }
     
     // Extract path and generate public URL
@@ -505,18 +605,37 @@ export const getRollImageUrlAsync = async (imageUrl, bucketType = null) => {
   // Roll images (roll-images bucket - private, needs signed URLs)
   // Only process if bucketType is 'roll' or not explicitly 'title'
   if (bucketType === 'roll' || (!bucketType && !isTitleImage)) {
+    // Check cache first
+    const cacheKey = getCacheKey(imageUrl, bucketType || 'roll');
+    const cached = urlCache.get(cacheKey);
+    
+    // If we have a cached signed URL that's still valid, use it
+    if (cached && cached.url && isSignedUrlValid(cached.url)) {
+      return cached.url;
+    }
+    
     // If it's already a signed URL, check if it's still valid
     if (imageUrl.includes('/storage/v1/object/sign/roll-images/')) {
-      // Extract path and regenerate to ensure it's not expired
+      if (isSignedUrlValid(imageUrl)) {
+        // Cache it for future use
+        const expiresAt = getExpiryFromSignedUrl(imageUrl);
+        urlCache.set(cacheKey, { url: imageUrl, expiresAt });
+        cleanupCache();
+        return imageUrl;
+      }
+      
+      // Extract path and regenerate
       const signMatch = imageUrl.match(/\/storage\/v1\/object\/sign\/roll-images\/(.+?)(\?|$)/);
       if (signMatch) {
         const path = decodeURIComponent(signMatch[1]);
-        // Regenerate signed URL
         const { data, error } = await supabase.storage
           .from('roll-images')
-          .createSignedUrl(path, 3600); // 1 hour expiry
+          .createSignedUrl(path, 3600);
         
         if (!error && data?.signedUrl) {
+          const expiresAt = getExpiryFromSignedUrl(data.signedUrl);
+          urlCache.set(cacheKey, { url: data.signedUrl, expiresAt });
+          cleanupCache();
           return data.signedUrl;
         }
       }
@@ -534,6 +653,9 @@ export const getRollImageUrlAsync = async (imageUrl, bucketType = null) => {
           .createSignedUrl(cleanPath, 3600);
         
         if (!error && data?.signedUrl) {
+          const expiresAt = getExpiryFromSignedUrl(data.signedUrl);
+          urlCache.set(cacheKey, { url: data.signedUrl, expiresAt });
+          cleanupCache();
           return data.signedUrl;
         }
       }
@@ -552,7 +674,6 @@ export const getRollImageUrlAsync = async (imageUrl, bucketType = null) => {
       
       if (path) {
         path = path.replace(/^\/+|\/+$/g, '');
-        console.log('🔗 Generating signed URL for roll image:', { path, originalUrl: imageUrl?.substring(0, 100) });
         
         try {
           const { data, error } = await supabase.storage
@@ -560,7 +681,9 @@ export const getRollImageUrlAsync = async (imageUrl, bucketType = null) => {
             .createSignedUrl(path, 3600); // 1 hour expiry
           
           if (!error && data?.signedUrl) {
-            console.log('✅ Generated signed URL successfully for roll image');
+            const expiresAt = getExpiryFromSignedUrl(data.signedUrl);
+            urlCache.set(cacheKey, { url: data.signedUrl, expiresAt });
+            cleanupCache();
             return data.signedUrl;
           }
           
@@ -622,5 +745,17 @@ export const deleteRollImage = async (imageUrl) => {
     console.error('Error deleting image:', error);
     throw error;
   }
+};
+
+/**
+ * Batch process multiple image URLs efficiently
+ * @param {Array<{url: string, bucketType?: string}>} imageUrls - Array of image URL objects
+ * @returns {Promise<Array<string>>} Array of processed URLs
+ */
+export const getRollImageUrlsBatch = async (imageUrls) => {
+  const results = await Promise.all(
+    imageUrls.map(({ url, bucketType }) => getRollImageUrlAsync(url, bucketType))
+  );
+  return results;
 };
 
