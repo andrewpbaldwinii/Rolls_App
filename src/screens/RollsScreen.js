@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -55,6 +55,17 @@ const RollsScreen = () => {
   const contributedRolls = getContributedRolls().filter(
     roll => roll.title?.toLowerCase() !== 'profile photos'
   );
+  
+  // Debug logging
+  useEffect(() => {
+    console.log('📊 RollsScreen - Roll counts:', {
+      totalRolls: rolls.length,
+      ownedRolls: ownedRolls.length,
+      contributedRolls: contributedRolls.length,
+      ownedRollTitles: ownedRolls.map(r => r.title),
+      contributedRollTitles: contributedRolls.map(r => r.title),
+    });
+  }, [rolls, ownedRolls, contributedRolls]);
   const activeRolls = rolls.filter(
     roll => roll.status === 'active' && roll.title?.toLowerCase() !== 'profile photos'
   );
@@ -62,6 +73,51 @@ const RollsScreen = () => {
     roll => roll.status === 'archived' && roll.title?.toLowerCase() !== 'profile photos'
   );
   const [imageCounts, setImageCounts] = useState({});
+  const [titleImageUrls, setTitleImageUrls] = useState({}); // Cache for processed title image URLs
+  const hasRefreshedRef = useRef(false);
+  const lastFocusTimeRef = useRef(0);
+
+  // Batch process title image URLs for better performance
+  const processTitleImages = useCallback(async (rollsToProcess) => {
+    if (!rollsToProcess || rollsToProcess.length === 0) return;
+    
+    // Filter rolls that need processing (have title_image_url but not in cache)
+    const rollsToProcessList = rollsToProcess.filter(
+      roll => roll.title_image_url && !titleImageUrls[roll.id]
+    );
+    
+    if (rollsToProcessList.length === 0) return; // Nothing to process
+    
+    try {
+      const { getRollImageUrlAsync } = await import('../services/storage');
+      
+      // Process all title images in parallel (batch API calls for efficiency)
+      const imagePromises = rollsToProcessList.map(async (roll) => {
+        try {
+          const processedUrl = await getRollImageUrlAsync(roll.title_image_url, 'title');
+          return { rollId: roll.id, url: processedUrl || roll.title_image_url };
+        } catch (err) {
+          console.warn(`Error processing title image for roll ${roll.id}:`, err);
+          return { rollId: roll.id, url: roll.title_image_url }; // Fallback to original
+        }
+      });
+      
+      const results = await Promise.all(imagePromises);
+      
+      // Update cache in one batch to avoid multiple re-renders
+      setTitleImageUrls(prev => {
+        const newUrls = { ...prev };
+        results.forEach(({ rollId, url }) => {
+          if (url) {
+            newUrls[rollId] = url;
+          }
+        });
+        return newUrls;
+      });
+    } catch (err) {
+      console.error('Error batch processing title images:', err);
+    }
+  }, [titleImageUrls]);
 
   // Fetch image counts for all rolls
   const fetchImageCounts = useCallback(async () => {
@@ -97,11 +153,27 @@ const RollsScreen = () => {
   }, [fetchImageCounts]);
 
   // Refetch image counts when screen comes into focus (e.g., after taking a photo)
+  // Also refresh rolls when screen comes into focus (e.g., after accepting an invite)
+  // Use time-based guard to prevent infinite loops
   useFocusEffect(
     useCallback(() => {
-      fetchImageCounts();
-    }, [fetchImageCounts])
+      const now = Date.now();
+      // Only refresh if it's been more than 2 seconds since last refresh
+      // This prevents rapid-fire refreshes while still allowing manual refresh
+      if (now - lastFocusTimeRef.current > 2000) {
+        fetchRolls();
+        fetchImageCounts();
+        lastFocusTimeRef.current = now;
+      }
+    }, [fetchRolls, fetchImageCounts]) // Include deps but use time-based guard
   );
+
+  // Process title images when rolls change
+  useEffect(() => {
+    if (rolls.length > 0) {
+      processTitleImages(rolls);
+    }
+  }, [rolls, processTitleImages]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -190,17 +262,33 @@ const RollsScreen = () => {
         is_public: isPublic,
       });
 
-      // Upload title image if selected
+      // Upload title image if selected (optimize with optimistic update)
+      let finalTitleImageUrl = null;
       if (titleImageUri && titleImageBase64) {
         setUploadingTitleImage(true);
         try {
+          // Optimistic: Add the local URI to cache immediately for instant feedback
+          const tempUrl = titleImageUri;
+          setTitleImageUrls(prev => ({ ...prev, [roll.id]: tempUrl }));
+          
           const titleImageUrl = await uploadRollTitleImage(roll.id, titleImageUri, titleImageBase64);
+          finalTitleImageUrl = titleImageUrl;
+          
           // Update roll with title image URL
           // Title images are public and separate from roll images (which are locked until release date)
           await updateRoll(roll.id, { title_image_url: titleImageUrl });
+          
+          // Update cache with final URL
+          setTitleImageUrls(prev => ({ ...prev, [roll.id]: titleImageUrl }));
           // Title images are NOT stored in roll_images - they're separate and always public
         } catch (uploadError) {
           console.error('Error uploading title image:', uploadError);
+          // Remove optimistic update on error
+          setTitleImageUrls(prev => {
+            const newUrls = { ...prev };
+            delete newUrls[roll.id];
+            return newUrls;
+          });
           // Don't fail the roll creation if image upload fails
           Alert.alert('Warning', 'Roll created but title image upload failed. You can add it later.');
         } finally {
@@ -214,7 +302,12 @@ const RollsScreen = () => {
       setReleaseDate(null);
       setIsPublic(false);
       setTitleImageUri(null);
+      setTitleImageBase64(null);
       setShowCreateModal(false);
+      
+      // Refresh rolls to show the new roll with title image immediately
+      await fetchRolls();
+      
       Alert.alert('Success', 'Roll created successfully!');
     } catch (error) {
       console.error('Error creating roll:', error);
@@ -300,12 +393,42 @@ const RollsScreen = () => {
 
     setUpdating(true);
     try {
+      // Update roll data first (faster, doesn't require image upload)
       await updateRoll(editingRoll.id, {
         title: rollName.trim(),
         description: rollDescription.trim() || null,
         submission_deadline: submissionDeadline.toISOString(),
         release_date: releaseDate ? releaseDate.toISOString() : null,
       });
+      
+      // Handle title image upload separately (can be slow)
+      if (titleImageUri && titleImageBase64) {
+        setUploadingTitleImage(true);
+        try {
+          // Optimistic: Update cache immediately with local URI for instant feedback
+          const tempUrl = titleImageUri;
+          setTitleImageUrls(prev => ({ ...prev, [editingRoll.id]: tempUrl }));
+          
+          const titleImageUrl = await uploadRollTitleImage(editingRoll.id, titleImageUri, titleImageBase64);
+          
+          // Update roll with title image URL
+          await updateRoll(editingRoll.id, { title_image_url: titleImageUrl });
+          
+          // Update cache with final URL
+          setTitleImageUrls(prev => ({ ...prev, [editingRoll.id]: titleImageUrl }));
+        } catch (uploadError) {
+          console.error('Error uploading title image:', uploadError);
+          // Remove optimistic update on error
+          setTitleImageUrls(prev => {
+            const newUrls = { ...prev };
+            delete newUrls[editingRoll.id];
+            return newUrls;
+          });
+          Alert.alert('Warning', 'Roll updated but title image upload failed. You can try again later.');
+        } finally {
+          setUploadingTitleImage(false);
+        }
+      }
       
       // Explicitly refresh rolls to ensure UI updates
       await fetchRolls();
@@ -314,6 +437,8 @@ const RollsScreen = () => {
       setRollDescription('');
       setSubmissionDeadline(new Date());
       setReleaseDate(null);
+      setTitleImageUri(null);
+      setTitleImageBase64(null);
       setEditingRoll(null);
       setShowEditModal(false);
       Alert.alert('Success', 'Roll updated successfully!');
@@ -336,23 +461,26 @@ const RollsScreen = () => {
     setShowReleaseDatePicker(false);
   };
 
-  const renderRollCard = (roll, isOwned = false) => {
-    const photoCount = imageCounts[roll.id] || 0;
+  // RollCard component - optimized to use pre-processed title image URLs
+  const RollCard = React.memo(({ roll, isOwned, photoCount, titleImageUrl, onPress, onLongPress, onEdit, onTogglePublic }) => {
     
     return (
       <TouchableOpacity
-        key={roll.id}
         style={styles.rollCard}
         activeOpacity={0.7}
-        onPress={() => {
-          navigation.navigate('RollDetail', { rollId: roll.id, initialRoll: roll });
-        }}
-        onLongPress={() => {
-          if (isOwned) {
-            handleDeleteRoll(roll);
-          }
-        }}
+        onPress={onPress}
+        onLongPress={onLongPress}
       >
+        {/* Title Image */}
+        {titleImageUrl ? (
+          <View style={styles.rollCardImageContainer}>
+            <Image 
+              source={{ uri: titleImageUrl }} 
+              style={styles.rollCardImage}
+              resizeMode="cover"
+            />
+          </View>
+        ) : null}
         <View style={styles.rollCardHeader}>
           <Ionicons
             name={isOwned ? 'camera' : 'people'}
@@ -376,10 +504,7 @@ const RollsScreen = () => {
             {isOwned && (
               <TouchableOpacity
                 style={styles.editButton}
-                onPress={(e) => {
-                  e.stopPropagation();
-                  handleEditRoll(roll);
-                }}
+                onPress={onEdit}
                 activeOpacity={0.7}
               >
                 <Ionicons name="create-outline" size={20} color={colors.buttonPrimary} />
@@ -404,7 +529,7 @@ const RollsScreen = () => {
                 style={[styles.publicToggle, styles.rollCardFooterItem]}
                 onPress={(e) => {
                   e.stopPropagation();
-                  handleTogglePublic(roll.id, roll.is_public);
+                  onTogglePublic(roll.id, roll.is_public);
                 }}
               >
                 <Ionicons
@@ -429,6 +554,34 @@ const RollsScreen = () => {
           </Text>
         </View>
       </TouchableOpacity>
+    );
+  });
+
+  const renderRollCard = (roll, isOwned = false) => {
+    const photoCount = imageCounts[roll.id] || 0;
+    const titleImageUrl = titleImageUrls[roll.id] || roll.title_image_url || null;
+    
+    return (
+      <RollCard
+        key={roll.id}
+        roll={roll}
+        isOwned={isOwned}
+        photoCount={photoCount}
+        titleImageUrl={titleImageUrl}
+        onPress={() => {
+          navigation.navigate('RollDetail', { rollId: roll.id, initialRoll: roll });
+        }}
+        onLongPress={() => {
+          if (isOwned) {
+            handleDeleteRoll(roll);
+          }
+        }}
+        onEdit={(e) => {
+          e.stopPropagation();
+          handleEditRoll(roll);
+        }}
+        onTogglePublic={handleTogglePublic}
+      />
     );
   };
 
@@ -488,25 +641,69 @@ const RollsScreen = () => {
           </View>
         ) : (
           <>
-            {/* Active Rolls - Owned */}
-            {ownedRolls.filter(r => r.status === 'active').length > 0 && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>My Rolls</Text>
-                {ownedRolls
-                  .filter(r => r.status === 'active')
-                  .map(roll => renderRollCard(roll, true))}
-              </View>
-            )}
+            {/* Active Rolls - Owned - Always show even if empty */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>My Rolls</Text>
+              {(() => {
+                // Show all active rolls (filter out archived, but show active, developing, and developed)
+                const activeOwnedRolls = ownedRolls.filter(r => r.status !== 'archived');
+                const displayedRolls = activeOwnedRolls.slice(0, 3);
+                const hasMore = activeOwnedRolls.length > 3;
+                
+                return activeOwnedRolls.length > 0 ? (
+                  <>
+                    {displayedRolls.map(roll => renderRollCard(roll, true))}
+                    {hasMore && (
+                      <TouchableOpacity
+                        style={styles.viewAllButton}
+                        onPress={() => navigation.navigate('AllRolls', { sectionType: 'owned' })}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.viewAllButtonText}>View All ({activeOwnedRolls.length})</Text>
+                        <Ionicons name="chevron-forward" size={20} color={colors.buttonPrimary} />
+                      </TouchableOpacity>
+                    )}
+                  </>
+                ) : (
+                  <View style={styles.emptySection}>
+                    <Ionicons name="camera-outline" size={32} color={colors.textSecondary} />
+                    <Text style={styles.emptySectionText}>No rolls yet. Create your first roll to get started!</Text>
+                  </View>
+                );
+              })()}
+            </View>
 
-            {/* Active Rolls - Contributed */}
-            {contributedRolls.filter(r => r.status === 'active').length > 0 && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Rolls I've Joined</Text>
-                {contributedRolls
-                  .filter(r => r.status === 'active')
-                  .map(roll => renderRollCard(roll, false))}
-              </View>
-            )}
+            {/* Active Rolls - Contributed (Invited Rolls) - Always show even if empty */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Invited Rolls</Text>
+              {(() => {
+                // Show all active rolls (filter out archived, but show active, developing, and developed)
+                const activeContributedRolls = contributedRolls.filter(r => r.status !== 'archived');
+                const displayedRolls = activeContributedRolls.slice(0, 3);
+                const hasMore = activeContributedRolls.length > 3;
+                
+                return activeContributedRolls.length > 0 ? (
+                  <>
+                    {displayedRolls.map(roll => renderRollCard(roll, false))}
+                    {hasMore && (
+                      <TouchableOpacity
+                        style={styles.viewAllButton}
+                        onPress={() => navigation.navigate('AllRolls', { sectionType: 'contributed' })}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.viewAllButtonText}>View All ({activeContributedRolls.length})</Text>
+                        <Ionicons name="chevron-forward" size={20} color={colors.buttonPrimary} />
+                      </TouchableOpacity>
+                    )}
+                  </>
+                ) : (
+                  <View style={styles.emptySection}>
+                    <Ionicons name="people-outline" size={32} color={colors.textSecondary} />
+                    <Text style={styles.emptySectionText}>No invites yet. Others can invite you to contribute to their rolls.</Text>
+                  </View>
+                );
+              })()}
+            </View>
 
             {/* Archived Rolls */}
             {archivedRolls.length > 0 && (
@@ -595,26 +792,71 @@ const RollsScreen = () => {
                 </Text>
               </TouchableOpacity>
               {showSubmissionDatePicker && (
-                <DateTimePicker
-                  value={submissionDeadline}
-                  mode="date"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(event, selectedDate) => {
-                    if (Platform.OS === 'android') {
-                      setShowSubmissionDatePicker(false);
-                    }
-                    
-                    if (event.type === 'set' && selectedDate) {
-                      const date = new Date(selectedDate);
-                      date.setHours(23, 59, 59, 999);
-                      setSubmissionDeadline(date);
-                      if (releaseDate && releaseDate <= date) {
-                        setReleaseDate(null);
-                      }
-                    }
-                  }}
-                  minimumDate={new Date()}
-                />
+                <>
+                  {Platform.OS === 'ios' ? (
+                    <View style={styles.iosPickerContainer}>
+                      <View style={styles.iosPickerHeader}>
+                        <TouchableOpacity
+                          onPress={() => setShowSubmissionDatePicker(false)}
+                          style={styles.iosPickerButton}
+                        >
+                          <Text style={styles.iosPickerCancelText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.iosPickerTitle}>Submission Deadline</Text>
+                        <TouchableOpacity
+                          onPress={() => {
+                            // Date is already set in state via onChange
+                            setShowSubmissionDatePicker(false);
+                          }}
+                          style={styles.iosPickerButton}
+                        >
+                          <Text style={styles.iosPickerDoneText}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <DateTimePicker
+                        value={submissionDeadline}
+                        mode="date"
+                        display="spinner"
+                        onChange={(event, selectedDate) => {
+                          if (selectedDate) {
+                            // Set time to end of day (23:59:59)
+                            const date = new Date(selectedDate);
+                            date.setHours(23, 59, 59, 999);
+                            setSubmissionDeadline(date);
+                            // If release date is before new submission deadline, clear it
+                            if (releaseDate && releaseDate <= date) {
+                              setReleaseDate(null);
+                            }
+                          }
+                        }}
+                        minimumDate={new Date()}
+                      />
+                    </View>
+                  ) : (
+                    <DateTimePicker
+                      value={submissionDeadline}
+                      mode="date"
+                      display="default"
+                      onChange={(event, selectedDate) => {
+                        // On Android, hide picker immediately after it's shown
+                        setShowSubmissionDatePicker(false);
+                        
+                        // Handle date selection
+                        if (event.type === 'set' && selectedDate) {
+                          // Set time to end of day (23:59:59)
+                          const date = new Date(selectedDate);
+                          date.setHours(23, 59, 59, 999);
+                          setSubmissionDeadline(date);
+                          // If release date is before new submission deadline, clear it
+                          if (releaseDate && releaseDate <= date) {
+                            setReleaseDate(null);
+                          }
+                        }
+                      }}
+                      minimumDate={new Date()}
+                    />
+                  )}
+                </>
               )}
 
               <Text style={[styles.inputLabel, styles.inputLabelMargin]}>Develop Date (Optional)</Text>
@@ -639,25 +881,69 @@ const RollsScreen = () => {
                 </Text>
               </TouchableOpacity>
               {showReleaseDatePicker && (
-                <DateTimePicker
-                  value={releaseDate || new Date(submissionDeadline.getTime() + 24 * 60 * 60 * 1000)}
-                  mode="date"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(event, selectedDate) => {
-                    if (Platform.OS === 'android') {
-                      setShowReleaseDatePicker(false);
-                    }
-                    
-                    if (event.type === 'set' && selectedDate) {
-                      const date = new Date(selectedDate);
-                      date.setHours(23, 59, 59, 999);
-                      setReleaseDate(date);
-                    } else if (event.type === 'dismissed') {
-                      setReleaseDate(null);
-                    }
-                  }}
-                  minimumDate={new Date(submissionDeadline.getTime() + 24 * 60 * 60 * 1000)}
-                />
+                <>
+                  {Platform.OS === 'ios' ? (
+                    <View style={styles.iosPickerContainer}>
+                      <View style={styles.iosPickerHeader}>
+                        <TouchableOpacity
+                          onPress={() => {
+                            // Cancel - don't change the date
+                            setShowReleaseDatePicker(false);
+                          }}
+                          style={styles.iosPickerButton}
+                        >
+                          <Text style={styles.iosPickerCancelText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.iosPickerTitle}>Develop Date</Text>
+                        <TouchableOpacity
+                          onPress={() => {
+                            // Done - date is already set in state via onChange
+                            setShowReleaseDatePicker(false);
+                          }}
+                          style={styles.iosPickerButton}
+                        >
+                          <Text style={styles.iosPickerDoneText}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <DateTimePicker
+                        value={releaseDate || new Date(submissionDeadline.getTime() + 24 * 60 * 60 * 1000)}
+                        mode="date"
+                        display="spinner"
+                        onChange={(event, selectedDate) => {
+                          if (selectedDate) {
+                            // Set time to end of day (23:59:59)
+                            const date = new Date(selectedDate);
+                            date.setHours(23, 59, 59, 999);
+                            setReleaseDate(date);
+                          }
+                        }}
+                        minimumDate={new Date(submissionDeadline.getTime() + 24 * 60 * 60 * 1000)}
+                      />
+                    </View>
+                  ) : (
+                    <DateTimePicker
+                      value={releaseDate || new Date(submissionDeadline.getTime() + 24 * 60 * 60 * 1000)}
+                      mode="date"
+                      display="default"
+                      onChange={(event, selectedDate) => {
+                        // On Android, hide picker immediately after it's shown
+                        setShowReleaseDatePicker(false);
+                        
+                        // Handle date selection
+                        if (event.type === 'set' && selectedDate) {
+                          // Set time to end of day (23:59:59)
+                          const date = new Date(selectedDate);
+                          date.setHours(23, 59, 59, 999);
+                          setReleaseDate(date);
+                        } else if (event.type === 'dismissed') {
+                          // User cancelled - don't set date
+                          setReleaseDate(null);
+                        }
+                      }}
+                      minimumDate={new Date(submissionDeadline.getTime() + 24 * 60 * 60 * 1000)}
+                    />
+                  )}
+                </>
               )}
 
               <TouchableOpacity
@@ -746,30 +1032,71 @@ const RollsScreen = () => {
                 </Text>
               </TouchableOpacity>
               {showSubmissionDatePicker && (
-                <DateTimePicker
-                  value={submissionDeadline}
-                  mode="date"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(event, selectedDate) => {
-                    // On Android, hide picker immediately after it's shown
-                    if (Platform.OS === 'android') {
-                      setShowSubmissionDatePicker(false);
-                    }
-                    
-                    // Handle date selection
-                    if (event.type === 'set' && selectedDate) {
-                      // Set time to end of day (23:59:59)
-                      const date = new Date(selectedDate);
-                      date.setHours(23, 59, 59, 999);
-                      setSubmissionDeadline(date);
-                      // If release date is before new submission deadline, clear it
-                      if (releaseDate && releaseDate <= date) {
-                        setReleaseDate(null);
-                      }
-                    }
-                  }}
-                  minimumDate={new Date()}
-                />
+                <>
+                  {Platform.OS === 'ios' ? (
+                    <View style={styles.iosPickerContainer}>
+                      <View style={styles.iosPickerHeader}>
+                        <TouchableOpacity
+                          onPress={() => setShowSubmissionDatePicker(false)}
+                          style={styles.iosPickerButton}
+                        >
+                          <Text style={styles.iosPickerCancelText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.iosPickerTitle}>Submission Deadline</Text>
+                        <TouchableOpacity
+                          onPress={() => {
+                            // Date is already set in state via onChange
+                            setShowSubmissionDatePicker(false);
+                          }}
+                          style={styles.iosPickerButton}
+                        >
+                          <Text style={styles.iosPickerDoneText}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <DateTimePicker
+                        value={submissionDeadline}
+                        mode="date"
+                        display="spinner"
+                        onChange={(event, selectedDate) => {
+                          if (selectedDate) {
+                            // Set time to end of day (23:59:59)
+                            const date = new Date(selectedDate);
+                            date.setHours(23, 59, 59, 999);
+                            setSubmissionDeadline(date);
+                            // If release date is before new submission deadline, clear it
+                            if (releaseDate && releaseDate <= date) {
+                              setReleaseDate(null);
+                            }
+                          }
+                        }}
+                        minimumDate={new Date()}
+                      />
+                    </View>
+                  ) : (
+                    <DateTimePicker
+                      value={submissionDeadline}
+                      mode="date"
+                      display="default"
+                      onChange={(event, selectedDate) => {
+                        // On Android, hide picker immediately after it's shown
+                        setShowSubmissionDatePicker(false);
+                        
+                        // Handle date selection
+                        if (event.type === 'set' && selectedDate) {
+                          // Set time to end of day (23:59:59)
+                          const date = new Date(selectedDate);
+                          date.setHours(23, 59, 59, 999);
+                          setSubmissionDeadline(date);
+                          // If release date is before new submission deadline, clear it
+                          if (releaseDate && releaseDate <= date) {
+                            setReleaseDate(null);
+                          }
+                        }
+                      }}
+                      minimumDate={new Date()}
+                    />
+                  )}
+                </>
               )}
 
               <Text style={[styles.inputLabel, styles.inputLabelMargin]}>Develop Date (Optional)</Text>
@@ -794,29 +1121,69 @@ const RollsScreen = () => {
                 </Text>
               </TouchableOpacity>
               {showReleaseDatePicker && (
-                <DateTimePicker
-                  value={releaseDate || new Date(submissionDeadline.getTime() + 24 * 60 * 60 * 1000)}
-                  mode="date"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(event, selectedDate) => {
-                    // On Android, hide picker immediately after it's shown
-                    if (Platform.OS === 'android') {
-                      setShowReleaseDatePicker(false);
-                    }
-                    
-                    // Handle date selection
-                    if (event.type === 'set' && selectedDate) {
-                      // Set time to end of day (23:59:59)
-                      const date = new Date(selectedDate);
-                      date.setHours(23, 59, 59, 999);
-                      setReleaseDate(date);
-                    } else if (event.type === 'dismissed') {
-                      // User cancelled - don't set date
-                      setReleaseDate(null);
-                    }
-                  }}
-                  minimumDate={new Date(submissionDeadline.getTime() + 24 * 60 * 60 * 1000)}
-                />
+                <>
+                  {Platform.OS === 'ios' ? (
+                    <View style={styles.iosPickerContainer}>
+                      <View style={styles.iosPickerHeader}>
+                        <TouchableOpacity
+                          onPress={() => {
+                            // Cancel - don't change the date
+                            setShowReleaseDatePicker(false);
+                          }}
+                          style={styles.iosPickerButton}
+                        >
+                          <Text style={styles.iosPickerCancelText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.iosPickerTitle}>Develop Date</Text>
+                        <TouchableOpacity
+                          onPress={() => {
+                            // Done - date is already set in state via onChange
+                            setShowReleaseDatePicker(false);
+                          }}
+                          style={styles.iosPickerButton}
+                        >
+                          <Text style={styles.iosPickerDoneText}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <DateTimePicker
+                        value={releaseDate || new Date(submissionDeadline.getTime() + 24 * 60 * 60 * 1000)}
+                        mode="date"
+                        display="spinner"
+                        onChange={(event, selectedDate) => {
+                          if (selectedDate) {
+                            // Set time to end of day (23:59:59)
+                            const date = new Date(selectedDate);
+                            date.setHours(23, 59, 59, 999);
+                            setReleaseDate(date);
+                          }
+                        }}
+                        minimumDate={new Date(submissionDeadline.getTime() + 24 * 60 * 60 * 1000)}
+                      />
+                    </View>
+                  ) : (
+                    <DateTimePicker
+                      value={releaseDate || new Date(submissionDeadline.getTime() + 24 * 60 * 60 * 1000)}
+                      mode="date"
+                      display="default"
+                      onChange={(event, selectedDate) => {
+                        // On Android, hide picker immediately after it's shown
+                        setShowReleaseDatePicker(false);
+                        
+                        // Handle date selection
+                        if (event.type === 'set' && selectedDate) {
+                          // Set time to end of day (23:59:59)
+                          const date = new Date(selectedDate);
+                          date.setHours(23, 59, 59, 999);
+                          setReleaseDate(date);
+                        } else if (event.type === 'dismissed') {
+                          // User cancelled - don't set date
+                          setReleaseDate(null);
+                        }
+                      }}
+                      minimumDate={new Date(submissionDeadline.getTime() + 24 * 60 * 60 * 1000)}
+                    />
+                  )}
+                </>
               )}
 
               <Text style={[styles.inputLabel, styles.inputLabelMargin]}>Title Image (Optional)</Text>
@@ -1148,6 +1515,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textSecondary,
   },
+  rollCardImageContainer: {
+    width: '100%',
+    height: 180,
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginBottom: 12,
+    backgroundColor: colors.inputBackground,
+  },
+  rollCardImage: {
+    width: '100%',
+    height: '100%',
+  },
   emptyContainer: {
     padding: 40,
     alignItems: 'center',
@@ -1167,6 +1546,35 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 32,
   },
+  emptySection: {
+    padding: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 100,
+  },
+  emptySectionText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    marginTop: 12,
+  },
+  viewAllButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    marginTop: 8,
+    backgroundColor: colors.cardBackground,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  viewAllButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.buttonPrimary,
+    marginRight: 8,
+  },
   emptyButton: {
     backgroundColor: colors.buttonPrimary,
     paddingHorizontal: 32,
@@ -1177,6 +1585,49 @@ const styles = StyleSheet.create({
     color: colors.buttonText,
     fontSize: 16,
     fontWeight: '600',
+  },
+  iosPickerContainer: {
+    backgroundColor: colors.background,
+    borderRadius: 12,
+    marginTop: 8,
+    marginBottom: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
+  },
+  iosPickerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.inputBorder,
+    backgroundColor: colors.inputBackground,
+  },
+  iosPickerButton: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    minWidth: 60,
+  },
+  iosPickerTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textPrimary,
+    flex: 1,
+    textAlign: 'center',
+  },
+  iosPickerDoneText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.buttonPrimary,
+    textAlign: 'right',
+  },
+  iosPickerCancelText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: colors.textSecondary,
+    textAlign: 'left',
   },
   modalOverlay: {
     position: 'absolute',

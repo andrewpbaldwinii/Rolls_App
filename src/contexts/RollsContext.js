@@ -4,6 +4,40 @@ import { useAuth } from './AuthContext';
 
 const RollsContext = createContext({});
 
+/**
+ * Calculate roll status based on dates
+ * @param {Object} roll - Roll object with submission_deadline and release_date
+ * @returns {string} - 'active', 'developing', or 'developed'
+ */
+export const calculateRollStatus = (roll) => {
+  const now = new Date();
+  const submissionDeadline = roll.submission_deadline ? new Date(roll.submission_deadline) : null;
+  const releaseDate = roll.release_date ? new Date(roll.release_date) : null;
+
+  // If no submission deadline, default to active
+  if (!submissionDeadline) {
+    return 'active';
+  }
+
+  // Active: Users can contribute because deadline hasn't been reached
+  if (now < submissionDeadline) {
+    return 'active';
+  }
+
+  // If no release date, stay in developing status
+  if (!releaseDate) {
+    return 'developing';
+  }
+
+  // Developing: Deadline is over but development date hasn't been met yet
+  if (now < releaseDate) {
+    return 'developing';
+  }
+
+  // Developed: Development date has been met and images are viewable
+  return 'developed';
+};
+
 export const RollsProvider = ({ children }) => {
   const { user } = useAuth();
   const [rolls, setRolls] = useState([]);
@@ -40,6 +74,26 @@ export const RollsProvider = ({ children }) => {
       // Fetch rolls where user is contributor (only if roll_contributors table exists)
       let contributedRolls = [];
       try {
+        console.log('🔍 Fetching contributor rolls for user:', user.id);
+        
+        // First, check if user has any contributor records at all
+        const { data: contributorCheck, error: checkError } = await supabase
+          .from('roll_contributors')
+          .select('roll_id')
+          .eq('user_id', user.id);
+        
+        if (checkError) {
+          console.error('❌ Error checking contributors:', checkError);
+        } else {
+          console.log('📊 Contributor check result:', contributorCheck?.length || 0, 'contributor records found');
+          if (contributorCheck && contributorCheck.length > 0) {
+            contributorCheck.forEach(item => {
+              console.log('  - Roll ID user is contributor to:', item.roll_id);
+            });
+          }
+        }
+        
+        // Now fetch the full roll data with join
         const { data: contributorData, error: contribError } = await supabase
           .from('roll_contributors')
           .select(`
@@ -51,26 +105,43 @@ export const RollsProvider = ({ children }) => {
         if (contribError) {
           // If table doesn't exist, just log and continue with owned rolls only
           if (contribError.code === 'PGRST116' || contribError.message?.includes('does not exist') || contribError.message?.includes('schema cache')) {
-            console.warn('roll_contributors table does not exist yet. Skipping contributor rolls.');
+            console.warn('⚠️ roll_contributors table does not exist yet. Skipping contributor rolls.');
           } else {
             // For other errors, log but don't throw - continue with owned rolls only
-            console.warn('Error fetching contributor rolls:', contribError);
+            console.error('❌ Error fetching contributor rolls:', contribError);
+            console.error('Error code:', contribError.code);
+            console.error('Error message:', contribError.message);
+            console.error('Error details:', JSON.stringify(contribError, null, 2));
           }
         } else if (contributorData) {
+          console.log('✅ Found contributor data:', contributorData.length, 'contributor records');
+          console.log('📋 Raw contributor data:', JSON.stringify(contributorData, null, 2));
+          
           // Extract roll objects from contributorData
           // Filter out "Profile Photos" rolls (case-insensitive)
           contributedRolls = contributorData
             .map(item => item.rolls)
             .filter(Boolean)
-            .filter(roll => roll.title?.toLowerCase() !== 'profile photos') || [];
+            .filter(roll => roll && roll.title && roll.title.toLowerCase() !== 'profile photos');
+          
+          console.log('📦 Extracted contributed rolls:', contributedRolls.length, 'rolls');
+          if (contributedRolls.length > 0) {
+            contributedRolls.forEach(roll => {
+              console.log('  ✅', roll.title, '(ID:', roll.id, ', Creator:', roll.creator_id, ')');
+            });
+          } else if (contributorData.length > 0) {
+            console.warn('⚠️ Contributor data found but no rolls extracted. Data:', contributorData);
+          }
+        } else {
+          console.log('ℹ️ No contributor data found (user may not be a contributor to any rolls)');
         }
       } catch (contribErr) {
         // If table doesn't exist, just log and continue with owned rolls only
         if (contribErr.code === 'PGRST116' || contribErr.message?.includes('does not exist') || contribErr.message?.includes('schema cache')) {
-          console.warn('roll_contributors table does not exist yet. Skipping contributor rolls.');
+          console.warn('⚠️ roll_contributors table does not exist yet. Skipping contributor rolls.');
         } else {
           // For other errors, log but don't throw - continue with owned rolls only
-          console.warn('Error fetching contributor rolls:', contribErr);
+          console.error('❌ Error fetching contributor rolls (exception):', contribErr);
         }
       }
 
@@ -86,7 +157,40 @@ export const RollsProvider = ({ children }) => {
         roll => roll.title?.toLowerCase() !== 'profile photos'
       );
 
-      setRolls(filteredRolls);
+      // Calculate and update status for all rolls based on dates
+      const rollsWithUpdatedStatus = filteredRolls.map(roll => {
+        const calculatedStatus = calculateRollStatus(roll);
+        
+        // If status differs from stored status, update it in the database
+        // Do this asynchronously to avoid blocking the UI
+        if (roll.status !== calculatedStatus) {
+          // Update status in database (fire and forget)
+          supabase
+            .from('rolls')
+            .update({ status: calculatedStatus })
+            .eq('id', roll.id)
+            .then(({ error }) => {
+              if (error) {
+                // If it's a constraint violation, it means the database needs the UPDATE_ROLL_STATUS_CONSTRAINT.sql script
+                if (error.code === '23514' && error.message?.includes('rolls_status_check')) {
+                  console.warn(
+                    `Database constraint doesn't allow status '${calculatedStatus}'. ` +
+                    `Run UPDATE_ROLL_STATUS_CONSTRAINT.sql in Supabase to enable 'developing' and 'developed' statuses.`
+                  );
+                } else {
+                  console.warn(`Failed to update status for roll ${roll.id}:`, error);
+                }
+              }
+            });
+          
+          // Return roll with updated status (even if DB update fails, show correct status in UI)
+          return { ...roll, status: calculatedStatus };
+        }
+        
+        return roll;
+      });
+
+      setRolls(rollsWithUpdatedStatus);
     } catch (err) {
       console.error('Error fetching rolls:', err);
       // Provide more detailed error information
@@ -110,13 +214,21 @@ export const RollsProvider = ({ children }) => {
     }
 
     try {
+      // Calculate initial status based on dates (will default to 'active' if dates are in future)
+      const calculatedStatus = rollData.submission_deadline 
+        ? calculateRollStatus({ 
+            submission_deadline: rollData.submission_deadline, 
+            release_date: rollData.release_date 
+          })
+        : 'active';
+
       const insertPayload = {
         title: rollData.name, // Using rollData.name for consistency with UI, maps to 'title' in DB
         description: rollData.description || null,
         submission_deadline: rollData.submission_deadline || null,
         release_date: rollData.release_date || null, // Can be null - photos visible immediately if not set
         creator_id: user.id,
-        status: rollData.status || 'active',
+        status: calculatedStatus, // Use calculated status instead of default
         is_public: rollData.is_public || false,
         title_image_url: rollData.title_image_url || null,
       };
@@ -147,6 +259,21 @@ export const RollsProvider = ({ children }) => {
           .insert([fallbackPayload])
           .select()
           .single());
+      }
+
+      // Handle release_date NOT NULL constraint error
+      if (
+        createError &&
+        (createError.code === '23502' && createError.message?.includes('release_date'))
+      ) {
+        console.warn(
+          'Rolls table has release_date as NOT NULL. The database schema needs to be updated to allow null values.'
+        );
+        throw new Error(
+          'Database configuration error: release_date cannot be null. Please run this SQL in Supabase:\n\n' +
+          'ALTER TABLE rolls ALTER COLUMN release_date DROP NOT NULL;\n\n' +
+          'Or run COMPLETE_DATABASE_SETUP.sql which includes this fix.'
+        );
       }
 
       if (createError) throw createError;
@@ -181,6 +308,28 @@ export const RollsProvider = ({ children }) => {
     }
 
     try {
+      // If dates are being updated, recalculate status
+      if (updates.submission_deadline || updates.release_date) {
+        // First fetch current roll to get existing dates if not all dates are being updated
+        const { data: currentRoll } = await supabase
+          .from('rolls')
+          .select('submission_deadline, release_date')
+          .eq('id', rollId)
+          .single();
+        
+        const submissionDeadline = updates.submission_deadline || currentRoll?.submission_deadline;
+        const releaseDate = updates.release_date !== undefined ? updates.release_date : currentRoll?.release_date;
+        
+        // Calculate new status based on updated dates
+        const calculatedStatus = calculateRollStatus({
+          submission_deadline: submissionDeadline,
+          release_date: releaseDate,
+        });
+        
+        // Add calculated status to updates
+        updates.status = calculatedStatus;
+      }
+
       const { data, error: updateError } = await supabase
         .from('rolls')
         .update(updates)
@@ -366,10 +515,57 @@ export const RollsProvider = ({ children }) => {
     };
   }, [user, fetchRolls]);
 
+  // Subscribe to real-time updates for roll_contributors to refresh when user is added/removed
+  // This will trigger when a user accepts an invite and gets added to roll_contributors
+  useEffect(() => {
+    if (!user) return;
+
+    // Debounce to prevent rapid-fire refreshes
+    let refreshTimeout = null;
+    const debouncedRefresh = () => {
+      if (refreshTimeout) clearTimeout(refreshTimeout);
+      refreshTimeout = setTimeout(() => {
+        console.log('🔔 Roll contributor changed, refreshing rolls...');
+        fetchRolls();
+      }, 500); // Wait 500ms before refreshing
+    };
+
+    const subscription = supabase
+      .channel('roll_contributors_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'roll_contributors',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          debouncedRefresh();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      if (refreshTimeout) clearTimeout(refreshTimeout);
+      subscription.unsubscribe();
+    };
+  }, [user, fetchRolls]);
+
   // Subscribe to real-time updates for roll_images to refresh image counts
   // This will trigger when images are added/removed from any roll
   useEffect(() => {
     if (!user) return;
+
+    // Debounce to prevent rapid-fire refreshes
+    let refreshTimeout = null;
+    const debouncedRefresh = () => {
+      if (refreshTimeout) clearTimeout(refreshTimeout);
+      refreshTimeout = setTimeout(() => {
+        console.log('Roll image changed, refreshing rolls...');
+        fetchRolls();
+      }, 500); // Wait 500ms before refreshing
+    };
 
     const subscription = supabase
       .channel('roll_images_changes')
@@ -381,15 +577,13 @@ export const RollsProvider = ({ children }) => {
           table: 'roll_images',
         },
         (payload) => {
-          // Refresh rolls to update image counts
-          // The fetchImageCounts in RollsScreen will pick up the changes
-          console.log('Roll image changed, refreshing rolls...', payload);
-          fetchRolls();
+          debouncedRefresh();
         }
       )
       .subscribe();
 
     return () => {
+      if (refreshTimeout) clearTimeout(refreshTimeout);
       subscription.unsubscribe();
     };
   }, [user, fetchRolls]);

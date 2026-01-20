@@ -1,18 +1,46 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Linking } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
 import LoginScreen from '../screens/LoginScreen';
 import SignUpScreen from '../screens/SignUpScreen';
 import ResetPasswordScreen from '../screens/ResetPasswordScreen';
 import MainNavigator from './MainNavigator';
 import colors from '../constants/colors';
+import { supabase } from '../lib/supabase';
 
 const Stack = createStackNavigator();
 
-const AuthNavigator = () => {
+const AuthNavigator = ({ navigationRef }) => {
   const { user, loading } = useAuth();
+
+  // Handle deep links after navigation is ready
+  useEffect(() => {
+    if (!navigationRef?.current || loading) return;
+
+    const handleDeepLink = async (url) => {
+      if (url && url.includes('rollsapp://roll/invite/')) {
+        const token = url.split('rollsapp://roll/invite/')[1];
+        if (token && user) {
+          // Navigate to invite confirmation
+          setTimeout(() => {
+            navigationRef.current?.navigate('InviteConfirmation', { inviteToken: token });
+          }, 500);
+        }
+      }
+    };
+
+    // Check initial URL
+    Linking.getInitialURL().then(handleDeepLink);
+
+    // Listen for new URLs
+    const subscription = Linking.addEventListener('url', ({ url }) => {
+      handleDeepLink(url);
+    });
+
+    return () => subscription.remove();
+  }, [navigationRef, user, loading]);
 
   if (loading) {
     return (
@@ -23,7 +51,7 @@ const AuthNavigator = () => {
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       {user ? (
         <MainNavigator />
       ) : (

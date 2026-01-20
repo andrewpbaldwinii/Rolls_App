@@ -1,10 +1,13 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Linking } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { NavigationContainerRef } from '@react-navigation/native';
 import { AuthProvider } from './src/contexts/AuthContext';
 import { RollsProvider } from './src/contexts/RollsContext';
 import AuthNavigator from './src/navigation/AuthNavigator';
 import { supabase } from './src/lib/supabase';
+
+const navigationRef = React.createRef();
 
 const App = () => {
   useEffect(() => {
@@ -13,6 +16,39 @@ const App = () => {
       console.log('Deep link received:', url);
       
       try {
+        // Check if it's a roll invite link
+        if (url.includes('rollsapp://roll/invite/')) {
+          const token = url.split('rollsapp://roll/invite/')[1];
+          if (token) {
+            console.log('Roll invite token detected:', token);
+            // Wait a bit for navigation to be ready
+            setTimeout(() => {
+              if (navigationRef.current) {
+                // Check if user is logged in
+                supabase.auth.getUser().then(({ data: { user } }) => {
+                  if (user) {
+                    // User is logged in, navigate to invite confirmation
+                    navigationRef.current?.navigate('MainTabs', {
+                      screen: 'Rolls',
+                      params: {
+                        screen: 'InviteConfirmation',
+                        params: { inviteToken: token },
+                      },
+                    });
+                    // Also try direct navigation
+                    navigationRef.current?.navigate('InviteConfirmation', { inviteToken: token });
+                  } else {
+                    // User not logged in, store token and show login
+                    // After login, check for pending invite
+                    console.log('User not logged in, invite will be handled after login');
+                  }
+                });
+              }
+            }, 1000);
+          }
+          return;
+        }
+
         // Check if it's a password reset link from Supabase
         if (url.includes('type=recovery') || url.includes('token=') || url.includes('access_token=')) {
           // Parse the URL to extract the token
@@ -52,7 +88,7 @@ const App = () => {
     <SafeAreaProvider>
       <AuthProvider>
         <RollsProvider>
-          <AuthNavigator />
+          <AuthNavigator navigationRef={navigationRef} />
         </RollsProvider>
       </AuthProvider>
     </SafeAreaProvider>

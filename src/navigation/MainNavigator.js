@@ -14,6 +14,9 @@ import EditProfileScreen from '../screens/EditProfileScreen';
 import PhotoViewerScreen from '../screens/PhotoViewerScreen';
 import InboxScreen from '../screens/InboxScreen';
 import MessageScreen from '../screens/MessageScreen';
+import InviteToRollScreen from '../screens/InviteToRollScreen';
+import InviteConfirmationScreen from '../screens/InviteConfirmationScreen';
+import AllRollsScreen from '../screens/AllRollsScreen';
 import CameraButton from '../components/CameraButton';
 import NotificationBadge from '../components/NotificationBadge';
 import colors from '../constants/colors';
@@ -220,6 +223,27 @@ const MainNavigator = () => {
       <Stack.Screen
         name="Message"
         component={MessageScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="InviteToRoll"
+        component={InviteToRollScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="InviteConfirmation"
+        component={InviteConfirmationScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="AllRolls"
+        component={AllRollsScreen}
         options={{
           presentation: 'card',
         }}

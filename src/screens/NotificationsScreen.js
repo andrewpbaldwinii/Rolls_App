@@ -7,6 +7,7 @@ import {
   FlatList,
   ActivityIndicator,
   RefreshControl,
+  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -14,16 +15,21 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../contexts/AuthContext';
 import { getNotifications, getUnreadNotificationCount } from '../services/notifications';
 import { getUnreadMessageCount } from '../services/messaging';
+import { acceptRollInvite, getPendingInvites } from '../services/rollInvites';
+import { useRolls } from '../contexts/RollsContext';
 import colors from '../constants/colors';
 
 const NotificationsScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const { fetchRolls } = useRolls();
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [unreadMessageCount, setUnreadMessageCount] = useState(0);
+  const [acceptingInviteId, setAcceptingInviteId] = useState(null);
+  const [pendingInvites, setPendingInvites] = useState([]);
 
   const loadNotifications = useCallback(async () => {
     if (!user?.id) return;
@@ -38,6 +44,21 @@ const NotificationsScreen = ({ navigation }) => {
       
       const messageCount = await getUnreadMessageCount(user.id);
       setUnreadMessageCount(messageCount);
+      
+      // Load pending invites to show accept/decline buttons
+      // Only load if there are roll_invite notifications to avoid unnecessary calls
+      const hasRollInvites = data.some(n => n.type === 'roll_invite');
+      if (hasRollInvites) {
+        try {
+          const invites = await getPendingInvites();
+          setPendingInvites(invites || []);
+        } catch (err) {
+          console.warn('Error loading pending invites:', err);
+          setPendingInvites([]);
+        }
+      } else {
+        setPendingInvites([]);
+      }
     } catch (error) {
       console.error('Error loading notifications:', error);
     } finally {
@@ -59,6 +80,34 @@ const NotificationsScreen = ({ navigation }) => {
 
   const handleInboxPress = () => {
     navigation.navigate('Inbox');
+  };
+
+  const handleAcceptInvite = async (notification) => {
+    if (!notification.related_roll_id) return;
+    
+    // Find the invite ID from pending invites
+    const invite = pendingInvites.find(inv => inv.roll_id === notification.related_roll_id);
+    if (!invite) {
+      Alert.alert('Error', 'Invite not found. Please try navigating to the roll and accepting from there.');
+      return;
+    }
+    
+    setAcceptingInviteId(invite.id);
+    try {
+      console.log('📥 Accepting roll invite:', invite.id);
+      await acceptRollInvite(invite.id);
+      
+      // Refresh everything
+      await fetchRolls();
+      await loadNotifications();
+      
+      Alert.alert('Success', 'You have been added as a contributor to this roll!');
+    } catch (error) {
+      console.error('Error accepting invite:', error);
+      Alert.alert('Error', error.message || 'Failed to accept invite. Please try again.');
+    } finally {
+      setAcceptingInviteId(null);
+    }
   };
 
   const formatTimestamp = (timestamp) => {
@@ -86,50 +135,97 @@ const NotificationsScreen = ({ navigation }) => {
 
   const renderNotification = ({ item }) => {
     const isUnread = !item.read_at;
+    const isRollInvite = item.type === 'roll_invite';
+    const pendingInvite = isRollInvite ? pendingInvites.find(inv => inv.roll_id === item.related_roll_id) : null;
+    const isAccepting = acceptingInviteId === pendingInvite?.id;
     
     return (
-      <TouchableOpacity
+      <View
         style={[
           styles.notificationItem,
           isUnread && styles.notificationItemUnread,
         ]}
-        activeOpacity={0.7}
-        onPress={() => {
-          // Handle notification tap based on type
-          if (item.type === 'message' && item.related_user_id) {
-            navigation.navigate('Message', {
-              userId: item.related_user_id,
-            });
-          }
-        }}
       >
-        <View style={styles.notificationIcon}>
-          {item.type === 'message' && (
-            <Ionicons name="mail" size={24} color={colors.primary} />
-          )}
-          {item.type === 'like' && (
-            <Ionicons name="heart" size={24} color={colors.error} />
-          )}
-          {item.type === 'comment' && (
-            <Ionicons name="chatbubble" size={24} color={colors.primary} />
-          )}
-          {item.type === 'follow' && (
-            <Ionicons name="person-add" size={24} color={colors.primary} />
-          )}
-        </View>
-        <View style={styles.notificationContent}>
-          <Text style={styles.notificationTitle}>{item.title}</Text>
-          {item.body && (
-            <Text style={styles.notificationBody} numberOfLines={2}>
-              {item.body}
+        <TouchableOpacity
+          style={styles.notificationContentWrapper}
+          activeOpacity={0.7}
+          onPress={() => {
+            // Handle notification tap based on type
+            if (item.type === 'message' && item.related_user_id) {
+              navigation.navigate('Message', {
+                userId: item.related_user_id,
+              });
+            } else if (item.type === 'roll_invite' && item.related_roll_id) {
+              // Navigate to roll detail screen
+              navigation.navigate('RollDetail', {
+                rollId: item.related_roll_id,
+              });
+            }
+          }}
+        >
+          <View style={styles.notificationIcon}>
+            {item.type === 'message' && (
+              <Ionicons name="mail" size={24} color={colors.primary} />
+            )}
+            {item.type === 'like' && (
+              <Ionicons name="heart" size={24} color={colors.error} />
+            )}
+            {item.type === 'comment' && (
+              <Ionicons name="chatbubble" size={24} color={colors.primary} />
+            )}
+            {item.type === 'follow' && (
+              <Ionicons name="person-add" size={24} color={colors.primary} />
+            )}
+            {item.type === 'roll_invite' && (
+              <Ionicons name="mail-open" size={24} color={colors.primary} />
+            )}
+          </View>
+          <View style={styles.notificationContent}>
+            <Text style={styles.notificationTitle}>{item.title}</Text>
+            {item.body && (
+              <Text style={styles.notificationBody} numberOfLines={2}>
+                {item.body}
+              </Text>
+            )}
+            <Text style={styles.notificationTime}>
+              {formatTimestamp(item.created_at)}
             </Text>
-          )}
-          <Text style={styles.notificationTime}>
-            {formatTimestamp(item.created_at)}
-          </Text>
-        </View>
-        {isUnread && <View style={styles.unreadDot} />}
-      </TouchableOpacity>
+          </View>
+          {isUnread && <View style={styles.unreadDot} />}
+        </TouchableOpacity>
+        
+        {/* Accept/Decline buttons for roll invites */}
+        {isRollInvite && pendingInvite && (
+          <View style={styles.inviteActions}>
+            <TouchableOpacity
+              style={[styles.acceptButton, isAccepting && styles.acceptButtonDisabled]}
+              onPress={() => handleAcceptInvite(item)}
+              disabled={isAccepting}
+            >
+              {isAccepting ? (
+                <ActivityIndicator size="small" color={colors.buttonText} />
+              ) : (
+                <>
+                  <Ionicons name="checkmark-circle" size={16} color={colors.buttonText} />
+                  <Text style={styles.acceptButtonText}>Accept</Text>
+                </>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.declineButton}
+              onPress={() => {
+                // Navigate to roll detail where they can decline
+                navigation.navigate('RollDetail', {
+                  rollId: item.related_roll_id,
+                });
+              }}
+            >
+              <Ionicons name="close-circle" size={16} color={colors.textSecondary} />
+              <Text style={styles.declineButtonText}>Decline</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
     );
   };
 
@@ -252,12 +348,14 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   notificationItem: {
-    flexDirection: 'row',
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: colors.inputBorder,
     backgroundColor: colors.background,
+  },
+  notificationContentWrapper: {
+    flexDirection: 'row',
   },
   notificationItemUnread: {
     backgroundColor: colors.inputBackground,
@@ -296,6 +394,46 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     alignSelf: 'center',
     marginLeft: 8,
+  },
+  inviteActions: {
+    flexDirection: 'row',
+    marginTop: 12,
+    gap: 8,
+  },
+  acceptButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.buttonPrimary,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    gap: 6,
+  },
+  acceptButtonDisabled: {
+    opacity: 0.6,
+  },
+  acceptButtonText: {
+    color: colors.buttonText,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  declineButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.inputBackground,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    gap: 6,
+  },
+  declineButtonText: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
 

@@ -23,6 +23,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useRolls } from '../contexts/RollsContext';
 import { setRollPublic } from '../services/publicProfile';
 import { uploadRollTitleImage } from '../services/storage';
+import { acceptRollInvite, getPendingInvites } from '../services/rollInvites';
 import { supabase } from '../lib/supabase';
 import colors from '../constants/colors';
 import OptimizedImage from '../components/OptimizedImage';
@@ -52,6 +53,8 @@ const RollDetailScreen = () => {
   const [updatingPublic, setUpdatingPublic] = useState(false);
   const [titleImageUrl, setTitleImageUrl] = useState(null);
   const [isContributor, setIsContributor] = useState(false);
+  const [pendingInvite, setPendingInvite] = useState(null);
+  const [acceptingInvite, setAcceptingInvite] = useState(false);
   const [visibleImageIndices, setVisibleImageIndices] = useState(new Set([0, 1, 2, 3, 4, 5])); // Only load first 6 images initially
 
   const isOwner = useMemo(() => {
@@ -128,10 +131,6 @@ const RollDetailScreen = () => {
 
       // Fetch roll images (exclude title images - they're separate and stored in rolls.title_image_url)
       // Title images are public and always visible, roll images are locked until release date
-      console.log('🔍 Fetching roll images for rollId:', rollId);
-      console.log('🔍 Current user ID:', user?.id);
-      
-      // First, try without the caption filter to see if that's the issue
       let { data: imageData, error: imageError } = await supabase
         .from('roll_images')
         .select('*')
@@ -139,34 +138,23 @@ const RollDetailScreen = () => {
         .order('created_at', { ascending: false });
       
       if (imageError) {
-        console.error('❌ Error fetching roll images (without filter):', imageError);
+        console.error('❌ Error fetching roll images:', imageError);
         console.error('Error code:', imageError.code);
         console.error('Error message:', imageError.message);
-        console.error('Error details:', JSON.stringify(imageError, null, 2));
         throw imageError;
       }
-      
-      console.log('📊 Raw image data count (before filter):', imageData?.length || 0);
       
       // Filter out title images manually (more reliable than .neq() with nulls)
       if (imageData && imageData.length > 0) {
         imageData = imageData.filter(img => img.caption !== '__title_image__');
-        console.log('📊 Filtered image data count (after filter):', imageData.length);
         
         // Ensure URLs are valid - generate signed URLs for roll-images bucket (private)
         const { getRollImageUrlAsync } = await import('../services/storage');
-        console.log('🔄 Processing roll image URLs to generate signed URLs...');
         const processedImages = await Promise.all(
-          imageData.map(async (img, index) => {
+          imageData.map(async (img) => {
             try {
               // Roll images are in roll-images bucket (private) - need signed URLs
               const validUrl = await getRollImageUrlAsync(img.image_url, 'roll');
-              const isSigned = validUrl?.includes('/storage/v1/object/sign/');
-              console.log(`✅ Roll image ${index + 1} processed:`, {
-                id: img.id,
-                isSigned,
-                urlPreview: validUrl?.substring(0, 80) + '...'
-              });
               return {
                 ...img,
                 image_url: validUrl || img.image_url
@@ -178,34 +166,36 @@ const RollDetailScreen = () => {
           })
         );
         imageData = processedImages;
-        console.log('✅ All roll image URLs processed:', {
-          totalImages: imageData.length
-        });
-      } else {
-        console.warn('⚠️ No images returned from query. Checking if images exist in database...');
-        // Diagnostic query to check if images exist at all
-        const { data: diagnosticData, error: diagnosticError } = await supabase
-          .from('roll_images')
-          .select('id, roll_id, caption, contributor_id')
-          .eq('roll_id', rollId);
-        console.log('🔍 Diagnostic query result:', {
-          count: diagnosticData?.length || 0,
-          error: diagnosticError,
-          sample: diagnosticData?.[0]
-        });
       }
       
+      // Set images (empty array is fine - roll might not have images yet)
       setImages(imageData || []);
       // Reset visible images to first 6 when images change
       setVisibleImageIndices(new Set([0, 1, 2, 3, 4, 5]));
 
-      // Fetch contributors count (includes owner)
-      const { count: contribCount, error: contribError } = await supabase
+      // Fetch contributors count
+      // Count = 1 (owner from creator_id) + number of additional contributors in roll_contributors
+      // Both owner and contributors should see the same count
+      const currentRoll = roll || (await supabase.from('rolls').select('creator_id').eq('id', rollId).single()).data;
+      const ownerId = currentRoll?.creator_id;
+      
+      // Get all contributor user_ids from roll_contributors table
+      const { data: contributorsData, error: contribError } = await supabase
         .from('roll_contributors')
-        .select('*', { count: 'exact', head: true })
+        .select('user_id')
         .eq('roll_id', rollId);
       if (contribError) throw contribError;
-      setContributorsCount(contribCount || 0);
+      
+      // Count unique contributors: owner (1) + contributors in table (excluding owner if somehow present)
+      const contributorUserIds = new Set(contributorsData?.map(c => c.user_id) || []);
+      // Remove owner from contributors set if they're in there (they shouldn't be, but handle it)
+      if (ownerId) {
+        contributorUserIds.delete(ownerId);
+      }
+      
+      // Total = 1 (owner) + additional contributors
+      const totalCount = 1 + contributorUserIds.size;
+      setContributorsCount(totalCount);
 
       // Check if current user is a contributor
       if (user?.id && !isOwner) {
@@ -216,8 +206,23 @@ const RollDetailScreen = () => {
           .eq('user_id', user.id)
           .single();
         setIsContributor(!!contributorData);
+        
+        // Check for pending invite if not a contributor
+        if (!contributorData) {
+          try {
+            const pendingInvites = await getPendingInvites();
+            const inviteForThisRoll = pendingInvites.find(invite => invite.roll_id === rollId);
+            setPendingInvite(inviteForThisRoll || null);
+          } catch (err) {
+            console.error('Error checking pending invites:', err);
+            setPendingInvite(null);
+          }
+        } else {
+          setPendingInvite(null);
+        }
       } else {
         setIsContributor(false);
+        setPendingInvite(null);
       }
     } catch (err) {
       console.error('Error loading roll detail:', err);
@@ -357,6 +362,27 @@ const RollDetailScreen = () => {
       Alert.alert('Error', 'Failed to update roll visibility');
     } finally {
       setUpdatingPublic(false);
+    }
+  };
+
+  const handleAcceptInvite = async () => {
+    if (!pendingInvite) return;
+    
+    setAcceptingInvite(true);
+    try {
+      console.log('📥 Accepting roll invite:', pendingInvite.id);
+      await acceptRollInvite(pendingInvite.id);
+      
+      // Refresh everything
+      await fetchData();
+      await fetchRolls(); // Refresh rolls list so it appears in RollsScreen
+      
+      Alert.alert('Success', 'You have been added as a contributor to this roll!');
+    } catch (error) {
+      console.error('Error accepting invite:', error);
+      Alert.alert('Error', error.message || 'Failed to accept invite. Please try again.');
+    } finally {
+      setAcceptingInvite(false);
     }
   };
 
@@ -636,6 +662,41 @@ const RollDetailScreen = () => {
             </Text>
           </View>
         )}
+
+        {/* Accept Invite Button (If there's a pending invite) */}
+        {pendingInvite && !isContributor && !isOwner && (
+          <View style={styles.inviteActionsContainer}>
+            <TouchableOpacity
+              style={[styles.acceptInviteButton, acceptingInvite && styles.acceptInviteButtonDisabled]}
+              onPress={handleAcceptInvite}
+              disabled={acceptingInvite}
+            >
+              {acceptingInvite ? (
+                <ActivityIndicator size="small" color={colors.buttonText} />
+              ) : (
+                <>
+                  <Ionicons name="checkmark-circle" size={20} color={colors.buttonText} />
+                  <Text style={styles.acceptInviteButtonText}>Accept Invite</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Invite Contributors Button (Owner Only) */}
+        {isOwner && (
+          <TouchableOpacity
+            style={styles.inviteButton}
+            onPress={() => navigation.navigate('InviteToRoll', { 
+              rollId: roll.id, 
+              rollName: roll.title 
+            })}
+          >
+            <Ionicons name="person-add" size={20} color={colors.buttonPrimary} />
+            <Text style={styles.inviteButtonText}>Invite Contributors</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+        )}
       </View>
 
       <View style={styles.galleryHeader}>
@@ -821,6 +882,48 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textSecondary,
     marginTop: 4,
+  },
+  inviteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.inputBackground,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    marginTop: 16,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: colors.buttonPrimary,
+  },
+  inviteButtonText: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.buttonPrimary,
+  },
+  inviteActionsContainer: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: colors.inputBorder,
+  },
+  acceptInviteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.buttonPrimary,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    gap: 8,
+  },
+  acceptInviteButtonDisabled: {
+    opacity: 0.6,
+  },
+  acceptInviteButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.buttonText,
   },
   description: {
     fontSize: 14,

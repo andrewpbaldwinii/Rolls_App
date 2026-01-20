@@ -7,7 +7,7 @@ export const getNotifications = async (userId, limit = 50, offset = 0) => {
   try {
     const { data: notifications, error } = await supabase
       .from('notifications')
-      .select('id, type, title, body, related_user_id, related_message_id, read_at, created_at')
+      .select('id, type, title, body, related_user_id, related_message_id, related_roll_id, read_at, created_at')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
