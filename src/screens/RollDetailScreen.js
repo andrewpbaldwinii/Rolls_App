@@ -67,6 +67,7 @@ const RollDetailScreen = () => {
   const [pendingInvite, setPendingInvite] = useState(null);
   const [acceptingInvite, setAcceptingInvite] = useState(false);
   const [visibleImageIndices, setVisibleImageIndices] = useState(new Set([0, 1, 2, 3, 4, 5])); // Only load first 6 images initially
+  const [showAllImages, setShowAllImages] = useState(false); // Pagination state for grid view
   
   // Feed view state for roll images
   const [feedItems, setFeedItems] = useState([]);
@@ -195,14 +196,16 @@ const RollDetailScreen = () => {
         const { getRollImageUrlAsync } = await import('../services/storage');
         const processedImages = await Promise.all(
           imageData.map(async (img) => {
+            const originalUrl = img.image_url; // Preserve original URL
             try {
               // Roll images are in roll-images bucket (private) - need signed URLs
-              const validUrl = await getRollImageUrlAsync(img.image_url, 'roll');
+              const validUrl = await getRollImageUrlAsync(originalUrl, 'roll');
               const contributorUser = img.contributor_id ? contributorUsers.get(img.contributor_id) : null;
               
               return {
                 ...img,
-                image_url: validUrl || img.image_url,
+                image_url: validUrl || originalUrl, // Use processed URL or fallback to original
+                original_image_url: originalUrl, // Preserve original as fallback
                 contributor: contributorUser || null,
               };
             } catch (err) {
@@ -210,12 +213,15 @@ const RollDetailScreen = () => {
               const contributorUser = img.contributor_id ? contributorUsers.get(img.contributor_id) : null;
               return {
                 ...img,
+                image_url: originalUrl, // Preserve original URL on error
+                original_image_url: originalUrl, // Also store as fallback
                 contributor: contributorUser || null,
-              }; // Return original on error but with contributor data
+              };
             }
           })
         );
         imageData = processedImages;
+        console.log(`✅ Processed ${processedImages.length} images for roll ${rollId}`);
       }
       
       // Check if current user is a contributor (need this before preparing feed)
@@ -252,21 +258,29 @@ const RollDetailScreen = () => {
       setImages(imageData || []);
       // Reset visible images to first 6 when images change
       setVisibleImageIndices(new Set([0, 1, 2, 3, 4, 5]));
+      // Reset pagination state when images change
+      setShowAllImages(false);
 
       // Prepare feed items from images (only if owner or contributor can view)
       const canViewFeed = isOwner || userIsContributor || roll?.is_public;
       if (canViewFeed && imageData && imageData.length > 0) {
-        const feedItemsData = imageData.map(img => ({
-          id: img.id,
-          type: 'roll_image',
-          imageUrl: img.image_url, // Already processed URL
-          caption: img.caption,
-          createdAt: img.created_at,
-          contributorId: img.contributor_id,
-          username: img.contributor?.username || null,
-          displayName: img.contributor?.display_name || null,
-          avatarUrl: img.contributor?.avatar_url || null,
-        }));
+        // Ensure all images are included in feed items, even if URL processing failed
+        const feedItemsData = imageData
+          .filter(img => img && img.id) // Filter out any null/undefined images
+          .map(img => ({
+            id: img.id,
+            type: 'roll_image',
+            imageUrl: img.image_url || img.original_image_url || '', // Use processed URL, fallback to original
+            caption: img.caption || '',
+            createdAt: img.created_at,
+            contributorId: img.contributor_id,
+            username: img.contributor?.username || null,
+            displayName: img.contributor?.display_name || null,
+            avatarUrl: img.contributor?.avatar_url || null,
+          }))
+          .filter(item => item.imageUrl); // Only include items with valid URLs
+        
+        console.log(`📸 Prepared ${feedItemsData.length} feed items from ${imageData.length} images (filtered ${imageData.length - feedItemsData.length} items without URLs)`);
         setFeedItems(feedItemsData);
 
         // Fetch like/comment counts and status for all images
@@ -1010,21 +1024,38 @@ const RollDetailScreen = () => {
             <Text style={styles.emptyText}>Photos will appear here once submitted.</Text>
           </View>
         ) : (
-          <FlatList
-            data={images}
-            keyExtractor={(item) => item.id.toString()}
-            renderItem={renderImageItem}
-            numColumns={GRID_COLUMNS}
-            columnWrapperStyle={styles.columnWrapper}
-            scrollEnabled={false}
-            contentContainerStyle={styles.grid}
-            // Aggressive memory optimization for large images
-            removeClippedSubviews={true}
-            maxToRenderPerBatch={3} // Only render 3 at a time
-            updateCellsBatchingPeriod={200}
-            initialNumToRender={6} // Start with 6
-            windowSize={2} // Very small window
-          />
+          <>
+            <FlatList
+              data={showAllImages ? images : images.slice(0, 6)}
+              keyExtractor={(item) => item.id.toString()}
+              renderItem={renderImageItem}
+              numColumns={GRID_COLUMNS}
+              columnWrapperStyle={styles.columnWrapper}
+              scrollEnabled={false}
+              contentContainerStyle={styles.grid}
+              // Aggressive memory optimization for large images
+              removeClippedSubviews={true}
+              maxToRenderPerBatch={3} // Only render 3 at a time
+              updateCellsBatchingPeriod={200}
+              initialNumToRender={6} // Start with 6
+              windowSize={2} // Very small window
+            />
+            {!showAllImages && images.length > 6 && (
+              <TouchableOpacity
+                style={styles.viewAllButton}
+                onPress={() => {
+                  setShowAllImages(true);
+                  // Expand visible indices to include all images for progressive loading
+                  setVisibleImageIndices(new Set(images.map((_, index) => index)));
+                }}
+              >
+                <Text style={styles.viewAllButtonText}>
+                  View All ({images.length} photos)
+                </Text>
+                <Ionicons name="chevron-down" size={20} color={colors.buttonPrimary} />
+              </TouchableOpacity>
+            )}
+          </>
         )}
 
         {/* Feed View - Only show for owners and contributors */}
@@ -1602,6 +1633,24 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.textSecondary,
     textAlign: 'center',
+  },
+  viewAllButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.inputBackground,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: colors.buttonPrimary,
+    gap: 8,
+  },
+  viewAllButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.buttonPrimary,
   },
   loadingContainer: {
     flex: 1,

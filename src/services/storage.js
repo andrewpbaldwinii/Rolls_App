@@ -534,10 +534,14 @@ export const getRollImageUrlAsync = async (imageUrl, bucketType = null) => {
         const filename = match[2];
         // Full path in old format: {rollId}/title/{filename}
         const oldPath = `${rollId}/title/${filename}`;
-        console.log('🔄 Old title image format detected in roll-images bucket:', {
-          oldPath: imageUrl.substring(0, 100),
-          path: oldPath
-        });
+        // Old format detected - silently handle it (code is working correctly)
+        // Only log in debug mode to reduce console noise
+        if (__DEV__ && false) { // Disabled by default - enable for debugging
+          console.debug('🔄 Old title image format detected in roll-images bucket:', {
+            oldPath: imageUrl.substring(0, 100),
+            path: oldPath
+          });
+        }
         
         // Try to generate signed URL from roll-images bucket (private)
         try {
@@ -547,7 +551,7 @@ export const getRollImageUrlAsync = async (imageUrl, bucketType = null) => {
             .createSignedUrl(cleanPath, 3600);
           
           if (!error && data?.signedUrl) {
-            console.log('✅ Generated signed URL for old title image');
+            // Successfully handled old format - no need to log
             return data.signedUrl;
           }
         } catch (err) {
@@ -558,7 +562,10 @@ export const getRollImageUrlAsync = async (imageUrl, bucketType = null) => {
         // New format: {rollId}/{filename} (no /title/ subdirectory)
         path = `${rollId}/${filename}`;
         bucket = 'roll-title-images';
-        console.log('🔄 Attempting to use new bucket format:', { bucket, path });
+        // Only log in debug mode
+        if (__DEV__ && false) {
+          console.debug('🔄 Attempting to use new bucket format:', { bucket, path });
+        }
       } else {
         // Try to extract from public URL format
         const publicMatch = imageUrl.match(/\/storage\/v1\/object\/public\/roll-images\/([^/]+)\/title\/(.+?)(\?|$)/);
@@ -573,7 +580,7 @@ export const getRollImageUrlAsync = async (imageUrl, bucketType = null) => {
               .createSignedUrl(oldPath.replace(/^\/+|\/+$/g, ''), 3600);
             
             if (!error && data?.signedUrl) {
-              console.log('✅ Generated signed URL for old title image (from public URL)');
+              // Successfully handled old format - no need to log
               return data.signedUrl;
             }
           } catch (err) {
