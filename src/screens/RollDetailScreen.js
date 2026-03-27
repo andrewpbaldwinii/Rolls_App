@@ -25,7 +25,7 @@ import { setRollPublic } from '../services/publicProfile';
 import { uploadRollTitleImage } from '../services/storage';
 import { acceptRollInvite, getPendingInvites } from '../services/rollInvites';
 import { supabase } from '../lib/supabase';
-import colors from '../constants/colors';
+import { useTheme } from '../contexts/ThemeContext';
 import OptimizedImage from '../components/OptimizedImage';
 import {
   likePhoto,
@@ -48,6 +48,9 @@ const IMAGE_SIZE =
   GRID_COLUMNS;
 
 const RollDetailScreen = () => {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const navigation = useNavigation();
   const route = useRoute();
   const insets = useSafeAreaInsets();
@@ -89,17 +92,11 @@ const RollDetailScreen = () => {
     return release > new Date();
   }, [roll]);
 
-  // View permissions:
-  // - Owners and contributors can always see images (even if locked)
-  // - Public rolls: Anyone can view all photos (regardless of release_date)
-  // - Private rolls: Only owner/contributors can view (release_date still applies)
+  // Who may see the contributions feed / full photo experience after development.
+  // Actual pixels stay hidden for everyone until release_date (see isLocked + fetchData).
   const canViewImages = useMemo(() => {
-    if (isOwner || isContributor) return true; // Owner/contributors always see
-    
-    // If roll is public, anyone can view (regardless of release_date)
+    if (isOwner || isContributor) return true;
     if (roll?.is_public) return true;
-    
-    // Private rolls: only owner/contributors can view
     return false;
   }, [isOwner, isContributor, roll?.is_public]);
 
@@ -114,37 +111,42 @@ const RollDetailScreen = () => {
       setLoading(true);
       setError(null);
 
-      // Fetch roll details (if not provided)
-      // Make sure to include is_public field
-      if (!roll) {
+      let rollRecord = roll;
+
+      if (!rollRecord) {
         const { data, error: rollError } = await supabase
           .from('rolls')
           .select('*')
           .eq('id', rollId)
           .single();
         if (rollError) throw rollError;
+        rollRecord = data;
         setRoll(data);
-      } else if (!roll.hasOwnProperty('is_public')) {
-        // If initialRoll was passed but doesn't have is_public, fetch it
+      } else if (!rollRecord.hasOwnProperty('is_public')) {
         const { data, error: rollError } = await supabase
           .from('rolls')
           .select('is_public')
           .eq('id', rollId)
           .single();
         if (!rollError && data) {
-          setRoll({ ...roll, is_public: data.is_public });
+          rollRecord = { ...rollRecord, is_public: data.is_public };
+          setRoll(rollRecord);
         }
       }
 
+      const photosUndeveloped =
+        !!rollRecord?.release_date &&
+        new Date(rollRecord.release_date) > new Date();
+
       // Process title image URL - ensure it uses roll-title-images bucket (public)
-      if (roll?.title_image_url) {
+      if (rollRecord?.title_image_url) {
         try {
           const { getRollImageUrlAsync } = await import('../services/storage');
-          const processedTitleUrl = await getRollImageUrlAsync(roll.title_image_url, 'title');
-          setTitleImageUrl(processedTitleUrl || roll.title_image_url);
+          const processedTitleUrl = await getRollImageUrlAsync(rollRecord.title_image_url, 'title');
+          setTitleImageUrl(processedTitleUrl || rollRecord.title_image_url);
         } catch (err) {
           console.warn('⚠️ Error processing title image URL:', err);
-          setTitleImageUrl(roll.title_image_url); // Fallback to original
+          setTitleImageUrl(rollRecord.title_image_url); // Fallback to original
         }
       } else {
         setTitleImageUrl(null);
@@ -196,25 +198,32 @@ const RollDetailScreen = () => {
         const { getRollImageUrlAsync } = await import('../services/storage');
         const processedImages = await Promise.all(
           imageData.map(async (img) => {
-            const originalUrl = img.image_url; // Preserve original URL
-            try {
-              // Roll images are in roll-images bucket (private) - need signed URLs
-              const validUrl = await getRollImageUrlAsync(originalUrl, 'roll');
-              const contributorUser = img.contributor_id ? contributorUsers.get(img.contributor_id) : null;
-              
+            const contributorUser = img.contributor_id ? contributorUsers.get(img.contributor_id) : null;
+
+            if (photosUndeveloped) {
               return {
                 ...img,
-                image_url: validUrl || originalUrl, // Use processed URL or fallback to original
-                original_image_url: originalUrl, // Preserve original as fallback
+                image_url: null,
+                original_image_url: null,
+                contributor: contributorUser || null,
+              };
+            }
+
+            const originalUrl = img.image_url;
+            try {
+              const validUrl = await getRollImageUrlAsync(originalUrl, 'roll');
+              return {
+                ...img,
+                image_url: validUrl || originalUrl,
+                original_image_url: originalUrl,
                 contributor: contributorUser || null,
               };
             } catch (err) {
               console.error(`❌ Error processing roll image URL for ${img.id}:`, err);
-              const contributorUser = img.contributor_id ? contributorUsers.get(img.contributor_id) : null;
               return {
                 ...img,
-                image_url: originalUrl, // Preserve original URL on error
-                original_image_url: originalUrl, // Also store as fallback
+                image_url: originalUrl,
+                original_image_url: originalUrl,
                 contributor: contributorUser || null,
               };
             }
@@ -224,9 +233,11 @@ const RollDetailScreen = () => {
         console.log(`✅ Processed ${processedImages.length} images for roll ${rollId}`);
       }
       
+      const viewerIsOwner = !!(user?.id && rollRecord?.creator_id === user.id);
+
       // Check if current user is a contributor (need this before preparing feed)
       let userIsContributor = false;
-      if (user?.id && !isOwner) {
+      if (user?.id && !viewerIsOwner) {
         const { data: contributorData } = await supabase
           .from('roll_contributors')
           .select('id')
@@ -261,9 +272,9 @@ const RollDetailScreen = () => {
       // Reset pagination state when images change
       setShowAllImages(false);
 
-      // Prepare feed items from images (only if owner or contributor can view)
-      const canViewFeed = isOwner || userIsContributor || roll?.is_public;
-      if (canViewFeed && imageData && imageData.length > 0) {
+      const canViewFeed =
+        viewerIsOwner || userIsContributor || rollRecord?.is_public;
+      if (canViewFeed && !photosUndeveloped && imageData && imageData.length > 0) {
         // Ensure all images are included in feed items, even if URL processing failed
         const feedItemsData = imageData
           .filter(img => img && img.id) // Filter out any null/undefined images
@@ -292,36 +303,32 @@ const RollDetailScreen = () => {
             );
             
             if (validFeedItems.length === 0) {
-              // No valid items, skip fetching interactions
               setFeedInteractions(new Map());
-              return;
-            }
-            
-            // Prepare photo objects for getPhotosLikeStatus (expects array of {id, type} objects)
-            const photoObjects = validFeedItems.map(item => ({
-              id: item.id,
-              type: PHOTO_TYPES.ROLL_IMAGE,
-            }));
-            
-            const imageIds = validFeedItems.map(item => item.id);
-            
-            const [likeStatuses, likeCounts, commentCounts] = await Promise.all([
-              getPhotosLikeStatus(photoObjects, user.id),
-              Promise.all(imageIds.map(id => getPhotoLikeCount(id, PHOTO_TYPES.ROLL_IMAGE).catch(() => 0))),
-              Promise.all(imageIds.map(id => getPhotoCommentCount(id, PHOTO_TYPES.ROLL_IMAGE).catch(() => 0))),
-            ]);
+            } else {
+              const photoObjects = validFeedItems.map(item => ({
+                id: item.id,
+                type: PHOTO_TYPES.ROLL_IMAGE,
+              }));
 
-            // Create interactions map
-            const interactions = new Map();
-            validFeedItems.forEach((item, index) => {
-              const likeStatus = likeStatuses.get(item.id);
-              interactions.set(item.id, {
-                liked: likeStatus?.liked || false,
-                likeCount: likeStatus?.count || likeCounts[index] || 0,
-                commentCount: commentCounts[index] || 0,
+              const imageIds = validFeedItems.map(item => item.id);
+
+              const [likeStatuses, likeCounts, commentCounts] = await Promise.all([
+                getPhotosLikeStatus(photoObjects, user.id),
+                Promise.all(imageIds.map(id => getPhotoLikeCount(id, PHOTO_TYPES.ROLL_IMAGE).catch(() => 0))),
+                Promise.all(imageIds.map(id => getPhotoCommentCount(id, PHOTO_TYPES.ROLL_IMAGE).catch(() => 0))),
+              ]);
+
+              const interactions = new Map();
+              validFeedItems.forEach((item, index) => {
+                const likeStatus = likeStatuses.get(item.id);
+                interactions.set(item.id, {
+                  liked: likeStatus?.liked || false,
+                  likeCount: likeStatus?.count || likeCounts[index] || 0,
+                  commentCount: commentCounts[index] || 0,
+                });
               });
-            });
-            setFeedInteractions(interactions);
+              setFeedInteractions(interactions);
+            }
           } catch (err) {
             console.error('Error fetching interactions:', err);
           }
@@ -334,7 +341,9 @@ const RollDetailScreen = () => {
       // Fetch contributors count
       // Count = 1 (owner from creator_id) + number of additional contributors in roll_contributors
       // Both owner and contributors should see the same count
-      const currentRoll = roll || (await supabase.from('rolls').select('creator_id').eq('id', rollId).single()).data;
+      const currentRoll =
+        rollRecord ||
+        (await supabase.from('rolls').select('creator_id').eq('id', rollId).single()).data;
       const ownerId = currentRoll?.creator_id;
       
       // Get all contributor user_ids from roll_contributors table
@@ -692,41 +701,39 @@ const RollDetailScreen = () => {
 
   const renderImageItem = ({ item, index }) => {
     const isLastInRow = (index + 1) % GRID_COLUMNS === 0;
-    const shouldShowLocked = isLocked && !canViewImages; // Only show locked for non-owners before release
-    const shouldLoadImage = visibleImageIndices.has(index); // Only load visible images to prevent memory issues
-    
-    return (
-      <View
-        style={[
-          styles.imageWrapper,
-          {
-            marginRight: isLastInRow ? 0 : GRID_GAP,
-            width: IMAGE_SIZE,
-            height: IMAGE_SIZE,
-          },
-        ]}
-      >
-        {shouldShowLocked ? (
-          // Show locked placeholder for non-owners before release date
+    const shouldLoadImage = visibleImageIndices.has(index);
+
+    const wrapperStyle = [
+      styles.imageWrapper,
+      {
+        marginRight: isLastInRow ? 0 : GRID_GAP,
+        width: IMAGE_SIZE,
+        height: IMAGE_SIZE,
+      },
+    ];
+
+    if (isLocked) {
+      return (
+        <View style={wrapperStyle}>
           <View style={styles.lockedImagePlaceholder}>
             <Ionicons name="lock-closed" size={32} color={colors.textSecondary} />
           </View>
-        ) : shouldLoadImage ? (
-          // Show image (owners/contributors can always see, others after release)
-          // Only load if in visible set to prevent memory pool violations
+        </View>
+      );
+    }
+
+    return (
+      <View style={wrapperStyle}>
+        {shouldLoadImage ? (
           <View style={styles.imageContainer}>
             <OptimizedImage
-              source={{ 
+              source={{
                 uri: item.image_url,
-                // Limit image size to prevent memory issues
                 width: IMAGE_SIZE,
                 height: IMAGE_SIZE,
               }}
-              style={[
-                styles.image,
-                isLocked && styles.lockedImage // Blur/lock overlay for owners before release
-              ]}
-              resizeMethod="resize" // Use resize instead of scale
+              style={styles.image}
+              resizeMethod="resize"
               resizeMode="cover"
               onError={(error) => {
                 const errorDetails = error.nativeEvent || error;
@@ -735,7 +742,6 @@ const RollDetailScreen = () => {
                   imageUrl: item.image_url,
                   error: errorDetails?.error || errorDetails?.message || errorDetails,
                 });
-                // Remove from visible set on error to prevent retry loops
                 setVisibleImageIndices(prev => {
                   const next = new Set(prev);
                   next.delete(index);
@@ -744,38 +750,27 @@ const RollDetailScreen = () => {
               }}
               onLoad={() => {
                 console.log('✅ Roll image loaded successfully:', item.id);
-                // Progressive loading: Load next batch after successful load
-                // Only load next image when current one is the last visible
                 const visibleArray = Array.from(visibleImageIndices);
                 if (visibleArray.length > 0) {
                   const maxVisible = Math.max(...visibleArray);
                   if (index === maxVisible && index < images.length - 1) {
-                    // Add next 3 images (one row) after a short delay to prevent memory spikes
                     setTimeout(() => {
                       setVisibleImageIndices(prev => {
                         const next = new Set(prev);
-                        // Add next 3 images (next row) - load one row at a time
                         const nextBatchSize = Math.min(3, images.length - index - 1);
                         for (let i = 1; i <= nextBatchSize; i++) {
                           next.add(index + i);
                         }
                         return next;
                       });
-                    }, 500); // 500ms delay between batches
+                    }, 500);
                   }
                 }
               }}
             />
-            {isLocked && canViewImages && (
-              // Lock overlay for owners/contributors before release
-              <View style={styles.lockOverlay}>
-                <Ionicons name="lock-closed" size={24} color={colors.background} />
-              </View>
-            )}
           </View>
         ) : (
-          // Show placeholder for images not yet loaded (progressive loading)
-          <View style={styles.lockedImagePlaceholder}>
+          <View style={styles.imageLoadingPlaceholder}>
             <ActivityIndicator size="small" color={colors.textSecondary} />
           </View>
         )}
@@ -806,7 +801,7 @@ const RollDetailScreen = () => {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
         <ActivityIndicator size="large" color={colors.buttonPrimary} />
         <Text style={styles.loadingText}>Loading roll...</Text>
       </View>
@@ -816,7 +811,7 @@ const RollDetailScreen = () => {
   if (error || !roll) {
     return (
       <View style={styles.loadingContainer}>
-        <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
         <Text style={styles.errorTitle}>Unable to load roll</Text>
         <Text style={styles.errorText}>{error || 'Roll not found'}</Text>
       </View>
@@ -832,7 +827,7 @@ const RollDetailScreen = () => {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
       <Header />
       <ScrollView contentContainerStyle={styles.content}>
         {/* Title Image - from roll-title-images bucket (public) */}
@@ -991,9 +986,9 @@ const RollDetailScreen = () => {
         {isOwner && (
           <TouchableOpacity
             style={styles.inviteButton}
-            onPress={() => navigation.navigate('InviteToRoll', { 
-              rollId: roll.id, 
-              rollName: roll.title 
+            onPress={() => navigation.navigate('InviteContributors', {
+              rollId: roll.id,
+              rollName: roll.title,
             })}
           >
             <Ionicons name="person-add" size={20} color={colors.buttonPrimary} />
@@ -1005,11 +1000,11 @@ const RollDetailScreen = () => {
 
       <View style={styles.galleryHeader}>
         <Text style={styles.galleryTitle}>Photos</Text>
-        {isLocked && !roll?.is_public ? (
+        {isLocked ? (
           <View style={styles.lockBadge}>
             <Ionicons name="lock-closed" size={14} color={colors.textSecondary} />
             <Text style={styles.lockBadgeText}>
-              {images.length} {images.length === 1 ? 'photo' : 'photos'} locked until release
+              {images.length} {images.length === 1 ? 'photo' : 'photos'} develop on {releaseDate}
             </Text>
           </View>
         ) : (
@@ -1281,7 +1276,7 @@ const RollDetailScreen = () => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.backgroundLight,
@@ -1587,28 +1582,21 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  lockedImage: {
-    opacity: 0.5,
-  },
-  lockOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+  lockedImagePlaceholder: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#BDBDBD',
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#9E9E9E',
   },
-  lockedImagePlaceholder: {
+  imageLoadingPlaceholder: {
     width: '100%',
     height: '100%',
     backgroundColor: colors.inputBackground,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: colors.inputBorder,
-    borderStyle: 'dashed',
-  },
-  lockOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.38)',
   },
   lockIconWrapper: {
     ...StyleSheet.absoluteFillObject,
@@ -1852,6 +1840,8 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
 });
+
+
 
 export default RollDetailScreen;
 

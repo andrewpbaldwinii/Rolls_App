@@ -1,58 +1,111 @@
-import React, { useEffect } from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import React, { useEffect, useMemo } from 'react';
+import {
+  DarkTheme,
+  DefaultTheme,
+  NavigationContainer,
+} from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
-import { View, ActivityIndicator, StyleSheet, Linking } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Linking, StatusBar } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
 import LoginScreen from '../screens/LoginScreen';
 import SignUpScreen from '../screens/SignUpScreen';
+import ForgotPasswordScreen from '../screens/ForgotPasswordScreen';
 import ResetPasswordScreen from '../screens/ResetPasswordScreen';
 import MainNavigator from './MainNavigator';
-import colors from '../constants/colors';
-import { supabase } from '../lib/supabase';
+import { useTheme } from '../contexts/ThemeContext';
 
 const Stack = createStackNavigator();
 
+const createAuthNavStyles = (colors) =>
+  StyleSheet.create({
+    loadingContainer: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: colors.background,
+    },
+  });
+
 const AuthNavigator = ({ navigationRef }) => {
-  const { user, loading } = useAuth();
+  const { user, loading, passwordRecoveryActive } = useAuth();
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createAuthNavStyles(colors), [colors]);
+  const navigationTheme = useMemo(
+    () => ({
+      ...(isDark ? DarkTheme : DefaultTheme),
+      colors: {
+        ...(isDark ? DarkTheme.colors : DefaultTheme.colors),
+        primary: colors.primary,
+        background: colors.background,
+        card: colors.background,
+        text: colors.textPrimary,
+        border: colors.inputBorder,
+        notification: colors.notificationBadge,
+      },
+    }),
+    [isDark, colors],
+  );
 
-  // Handle deep links after navigation is ready
+  // Roll invite deep links (AuthContext handles password reset; App.tsx does not duplicate Linking)
   useEffect(() => {
-    if (!navigationRef?.current || loading) return;
+    if (loading) return;
 
-    const handleDeepLink = async (url) => {
-      if (url && url.includes('rollsapp://roll/invite/')) {
-        const token = url.split('rollsapp://roll/invite/')[1];
-        if (token && user) {
-          // Navigate to invite confirmation
-          setTimeout(() => {
-            navigationRef.current?.navigate('InviteConfirmation', { inviteToken: token });
-          }, 500);
-        }
+    const parseInviteToken = (url) => {
+      if (!url || !url.includes('rollsapp://roll/invite/')) return null;
+      const rest = url.split('rollsapp://roll/invite/')[1] || '';
+      const token = rest.split(/[?#]/)[0]?.trim();
+      return token || null;
+    };
+
+    const handleDeepLink = (url) => {
+      const token = parseInviteToken(url);
+      if (!token || !user) return;
+      const nav = () =>
+        navigationRef.current?.navigate('InviteConfirmation', { inviteToken: token });
+      // Ref may attach one frame after first paint
+      if (navigationRef.current?.isReady?.()) {
+        setTimeout(nav, 100);
+      } else {
+        setTimeout(nav, 400);
       }
     };
 
-    // Check initial URL
-    Linking.getInitialURL().then(handleDeepLink);
-
-    // Listen for new URLs
-    const subscription = Linking.addEventListener('url', ({ url }) => {
-      handleDeepLink(url);
-    });
-
+    Linking.getInitialURL().then((url) => url && handleDeepLink(url));
+    const subscription = Linking.addEventListener('url', ({ url }) => handleDeepLink(url));
     return () => subscription.remove();
   }, [navigationRef, user, loading]);
+
+  // After recovery link opens the app, session exists — stay on auth stack and show Reset Password
+  useEffect(() => {
+    if (loading || !passwordRecoveryActive || !user) return;
+    const t = setTimeout(() => {
+      const nav = navigationRef?.current;
+      if (nav?.isReady?.()) {
+        nav.navigate('ResetPassword');
+      } else {
+        nav?.navigate('ResetPassword');
+      }
+    }, 150);
+    return () => clearTimeout(t);
+  }, [passwordRecoveryActive, user, loading, navigationRef]);
 
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
+        <StatusBar
+          barStyle={isDark ? 'light-content' : 'dark-content'}
+          backgroundColor={colors.background}
+        />
         <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
 
+  const showMainApp = user && !passwordRecoveryActive;
+
   return (
-    <NavigationContainer ref={navigationRef}>
-      {user ? (
+    <NavigationContainer ref={navigationRef} theme={navigationTheme}>
+      {showMainApp ? (
         <MainNavigator />
       ) : (
         <Stack.Navigator
@@ -62,21 +115,13 @@ const AuthNavigator = ({ navigationRef }) => {
         >
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="SignUp" component={SignUpScreen} />
+          <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
           <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} />
         </Stack.Navigator>
       )}
     </NavigationContainer>
   );
 };
-
-const styles = StyleSheet.create({
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-});
 
 export default AuthNavigator;
 

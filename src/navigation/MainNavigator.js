@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { View, StyleSheet, Platform, Image } from 'react-native';
@@ -14,18 +14,64 @@ import EditProfileScreen from '../screens/EditProfileScreen';
 import PhotoViewerScreen from '../screens/PhotoViewerScreen';
 import InboxScreen from '../screens/InboxScreen';
 import MessageScreen from '../screens/MessageScreen';
-import InviteToRollScreen from '../screens/InviteToRollScreen';
+import InviteContributorsScreen from '../screens/InviteContributorsScreen';
 import InviteConfirmationScreen from '../screens/InviteConfirmationScreen';
 import AllRollsScreen from '../screens/AllRollsScreen';
 import CameraButton from '../components/CameraButton';
 import NotificationBadge from '../components/NotificationBadge';
-import colors from '../constants/colors';
+import { useTheme } from '../contexts/ThemeContext';
 import appIcon from '../assets/images/app_icon.png';
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
 
+const createTabStyles = (colors) =>
+  StyleSheet.create({
+    tabBar: {
+      backgroundColor: colors.navBackground,
+      height: Platform.OS === 'ios' ? 88 : 70,
+      paddingTop: 5,
+      paddingBottom: Platform.OS === 'ios' ? 30 : 10,
+      borderTopWidth: 0,
+      elevation: 8,
+      shadowColor: '#000',
+      shadowOffset: {
+        width: 0,
+        height: -2,
+      },
+      shadowOpacity: 0.1,
+      shadowRadius: 4,
+    },
+    tabBarLabel: {
+      fontSize: 10,
+      fontWeight: '600',
+      marginTop: 4,
+    },
+    iconContainer: {
+      width: 24,
+      height: 24,
+      justifyContent: 'center',
+      alignItems: 'center',
+      position: 'relative',
+    },
+    cameraButtonContainer: {
+      top: -15,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    appIcon: {
+      width: 24,
+      height: 24,
+    },
+    rollsIconContainer: {
+      width: 48,
+      height: 48,
+    },
+  });
+
 const TabNavigator = () => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createTabStyles(colors), [colors]);
   // TODO: Replace with actual notification count from context/state
   const notificationCount = 0; // Placeholder
 
@@ -132,49 +178,6 @@ const TabNavigator = () => {
   );
 };
 
-const styles = StyleSheet.create({
-  tabBar: {
-    backgroundColor: colors.navBackground,
-    height: Platform.OS === 'ios' ? 88 : 70,
-    paddingTop: 5,
-    paddingBottom: Platform.OS === 'ios' ? 30 : 10,
-    borderTopWidth: 0,
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: -2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
-  tabBarLabel: {
-    fontSize: 10,
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  iconContainer: {
-    width: 24,
-    height: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    position: 'relative',
-  },
-  cameraButtonContainer: {
-    top: -15,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  appIcon: {
-    width: 24,
-    height: 24,
-  },
-  rollsIconContainer: {
-    width: 48,
-    height: 48,
-  },
-});
-
 const MainNavigator = () => {
   return (
     <Stack.Navigator
@@ -228,8 +231,8 @@ const MainNavigator = () => {
         }}
       />
       <Stack.Screen
-        name="InviteToRoll"
-        component={InviteToRollScreen}
+        name="InviteContributors"
+        component={InviteContributorsScreen}
         options={{
           presentation: 'card',
         }}

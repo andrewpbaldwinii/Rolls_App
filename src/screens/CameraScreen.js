@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,17 +11,22 @@ import {
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useRolls } from '../contexts/RollsContext';
 import { uploadRollImage } from '../services/storage';
-import colors from '../constants/colors';
+import { isSubmissionOpenForCamera } from '../utils/rollSubmissionDeadline';
+import { useTheme } from '../contexts/ThemeContext';
 
 const CameraScreen = () => {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation();
   const cameraRef = useRef(null);
   const isMountedRef = useRef(true);
   const { hasPermission, requestPermission } = useCameraPermission();
-  const { addImageToRoll, getOwnedRolls, getContributedRolls, fetchRolls } = useRolls();
+  const { rolls, addImageToRoll, getOwnedRolls, getContributedRolls, fetchRolls } = useRolls();
   const backDevice = useCameraDevice('back');
   const frontDevice = useCameraDevice('front');
   const [cameraType, setCameraType] = useState('back'); // 'back' or 'front'
@@ -34,11 +39,12 @@ const CameraScreen = () => {
   // Select the active device based on cameraType
   const device = cameraType === 'front' ? frontDevice : backDevice;
 
-  const ownedRolls = getOwnedRolls();
-  const contributedRolls = getContributedRolls();
-  const availableRolls = [...ownedRolls, ...contributedRolls].filter(
-    roll => (roll?.status || '').toLowerCase() !== 'archived'
-  );
+  const eligibleRolls = useMemo(() => {
+    const merged = [...getOwnedRolls(), ...getContributedRolls()].filter(
+      roll => (roll?.status || '').toLowerCase() !== 'archived'
+    );
+    return merged.filter(isSubmissionOpenForCamera);
+  }, [rolls, getOwnedRolls, getContributedRolls]);
 
   // Ensure rolls are fresh when entering the camera screen
   useEffect(() => {
@@ -69,12 +75,16 @@ const CameraScreen = () => {
     };
   }, []);
 
-  // Auto-select first roll if available
+  // Keep selection in sync: clear if none eligible; fix if selected roll passed deadline
   useEffect(() => {
-    if (availableRolls.length > 0 && !selectedRoll) {
-      setSelectedRoll(availableRolls[0]);
+    if (eligibleRolls.length === 0) {
+      setSelectedRoll(null);
+      return;
     }
-  }, [availableRolls.length]);
+    setSelectedRoll(prev =>
+      prev && eligibleRolls.some(r => r.id === prev.id) ? prev : eligibleRolls[0]
+    );
+  }, [eligibleRolls]);
 
   // Refresh rolls when selector opens to ensure new rolls appear
   useEffect(() => {
@@ -99,11 +109,17 @@ const CameraScreen = () => {
 
     // Check if a roll is selected
     if (!selectedRoll) {
-      if (availableRolls.length === 0) {
+      if (eligibleRolls.length === 0) {
         Alert.alert(
-          'No Rolls Available',
-          'Please create a roll first before taking photos.',
-          [{ text: 'OK' }]
+          'No rolls open for photos',
+          'Create a new roll or wait for an invite. Submission deadlines that have passed are hidden here.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Create a roll',
+              onPress: () => navigation.navigate('Rolls', { openCreateRoll: true }),
+            },
+          ]
         );
         return;
       }
@@ -312,10 +328,10 @@ const CameraScreen = () => {
         </TouchableOpacity>
 
         {/* Dropdown Menu */}
-        {showRollSelector && availableRolls.length > 0 && (
+        {showRollSelector && eligibleRolls.length > 0 && (
           <View style={styles.dropdownContainer}>
             <View style={styles.dropdownContent}>
-              {availableRolls.map((roll) => (
+              {eligibleRolls.map((roll) => (
                 <TouchableOpacity
                   key={roll.id}
                   style={[
@@ -345,13 +361,26 @@ const CameraScreen = () => {
           </View>
         )}
 
-        {showRollSelector && availableRolls.length === 0 && (
+        {showRollSelector && eligibleRolls.length === 0 && (
           <View style={styles.dropdownContainer}>
             <View style={styles.dropdownContent}>
               <View style={styles.dropdownEmpty}>
                 <Ionicons name="camera-outline" size={24} color={colors.textSecondary} />
-                <Text style={styles.dropdownEmptyText}>No active rolls</Text>
-                <Text style={styles.dropdownEmptySubtext}>Create a roll first</Text>
+                <Text style={styles.dropdownEmptyText}>No rolls open for photos</Text>
+                <Text style={styles.dropdownEmptySubtext}>
+                  Deadlines that have passed are hidden. Create a roll to get started.
+                </Text>
+                <TouchableOpacity
+                  style={styles.createRollLink}
+                  onPress={() => {
+                    setShowRollSelector(false);
+                    navigation.navigate('Rolls', { openCreateRoll: true });
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.createRollLinkText}>Create a roll</Text>
+                  <Ionicons name="chevron-forward" size={18} color={colors.buttonPrimary} />
+                </TouchableOpacity>
               </View>
             </View>
           </View>
@@ -404,7 +433,7 @@ const CameraScreen = () => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#000',
@@ -542,6 +571,26 @@ const styles = StyleSheet.create({
   dropdownEmptySubtext: {
     fontSize: 14,
     color: colors.textSecondary,
+    textAlign: 'center',
+    marginTop: 4,
+    paddingHorizontal: 8,
+  },
+  createRollLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: colors.inputBackground,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.buttonPrimary,
+  },
+  createRollLinkText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.buttonPrimary,
+    flex: 1,
   },
   captureButton: {
     width: 80,
@@ -606,5 +655,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+
+
 
 export default CameraScreen;

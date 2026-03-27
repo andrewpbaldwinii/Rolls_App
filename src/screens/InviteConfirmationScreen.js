@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -16,10 +16,13 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../contexts/AuthContext';
 import { acceptRollInviteByToken, declineRollInvite } from '../services/rollInvites';
 import { supabase } from '../lib/supabase';
-import colors from '../constants/colors';
+import { useTheme } from '../contexts/ThemeContext';
 import OptimizedImage from '../components/OptimizedImage';
 
 const InviteConfirmationScreen = () => {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const navigation = useNavigation();
   const route = useRoute();
   const insets = useSafeAreaInsets();
@@ -123,7 +126,7 @@ const InviteConfirmationScreen = () => {
   if (loading) {
     return (
       <View style={styles.container}>
-        <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.buttonPrimary} />
           <Text style={styles.loadingText}>Loading invitation...</Text>
@@ -135,7 +138,7 @@ const InviteConfirmationScreen = () => {
   if (error || !roll || !inviter) {
     return (
       <View style={styles.container}>
-        <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
         <View style={styles.errorContainer}>
           <Ionicons name="alert-circle-outline" size={64} color={colors.error} />
           <Text style={styles.errorTitle}>Invalid Invitation</Text>
@@ -161,7 +164,7 @@ const InviteConfirmationScreen = () => {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
       
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <View style={{ width: 24 }} />
@@ -268,7 +271,7 @@ const InviteConfirmationScreen = () => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.backgroundLight,
@@ -469,5 +472,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
 });
+
+
 
 export default InviteConfirmationScreen;

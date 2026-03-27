@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -33,13 +33,16 @@ import {
   getPhotoComments,
   PHOTO_TYPES,
 } from '../services/interactions';
-import colors from '../constants/colors';
+import { useTheme } from '../contexts/ThemeContext';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const ITEM_WIDTH = SCREEN_WIDTH;
 const IMAGE_HEIGHT = SCREEN_WIDTH; // Square images
 
 const HomeScreen = () => {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const { user } = useAuth();
@@ -608,7 +611,7 @@ const HomeScreen = () => {
   if (loading && items.length === 0) {
     return (
       <View style={styles.container}>
-        <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
         <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
           <Text style={styles.headerTitle}>Newsfeed</Text>
         </View>
@@ -622,7 +625,7 @@ const HomeScreen = () => {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
       
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
@@ -679,7 +682,7 @@ const formatTimestamp = (timestamp) => {
   }
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -896,6 +899,8 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
 });
+
+
 
 export default HomeScreen;
 

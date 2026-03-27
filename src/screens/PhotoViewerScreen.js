@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -31,11 +31,14 @@ import {
   getPhotoCommentCount,
   PHOTO_TYPES,
 } from '../services/interactions';
-import colors from '../constants/colors';
+import { useTheme } from '../contexts/ThemeContext';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 const PhotoViewerScreen = () => {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const route = useRoute();
@@ -491,7 +494,7 @@ const PhotoViewerScreen = () => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#000',
@@ -650,14 +653,14 @@ const styles = StyleSheet.create({
   },
   commentInput: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.inputBackground,
     borderWidth: 1,
     borderColor: colors.inputBorder,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 14,
-    color: '#000000',
+    color: colors.textPrimary,
     maxHeight: 100,
     minHeight: 40,
     marginRight: 8,
@@ -680,5 +683,7 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
 });
+
+
 
 export default PhotoViewerScreen;

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,50 +9,112 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  StatusBar,
 } from 'react-native';
+import { CommonActions, useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
-import colors from '../constants/colors';
+import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
 
-const ResetPasswordScreen = ({ navigation, route }) => {
+const createStyles = (colors) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    content: {
+      flex: 1,
+      justifyContent: 'center',
+      padding: 20,
+    },
+    title: {
+      fontSize: 24,
+      fontWeight: 'bold',
+      marginBottom: 10,
+      textAlign: 'left',
+      color: colors.textPrimary,
+    },
+    subtitle: {
+      fontSize: 16,
+      color: colors.textSecondary,
+      marginBottom: 40,
+      textAlign: 'left',
+    },
+    input: {
+      borderWidth: 1,
+      borderColor: colors.inputBorder,
+      borderRadius: 8,
+      padding: 15,
+      marginBottom: 15,
+      fontSize: 16,
+      backgroundColor: colors.inputBackground,
+      color: colors.textPrimary,
+    },
+    button: {
+      backgroundColor: colors.buttonPrimary,
+      borderRadius: 8,
+      padding: 15,
+      alignItems: 'center',
+      marginTop: 10,
+    },
+    buttonDisabled: {
+      backgroundColor: colors.buttonPrimaryDisabled,
+    },
+    buttonText: {
+      color: colors.buttonText,
+      fontSize: 16,
+      fontWeight: '600',
+    },
+    linkButton: {
+      marginTop: 20,
+      alignItems: 'center',
+    },
+    linkText: {
+      color: colors.link,
+      fontSize: 14,
+    },
+    infoBox: {
+      backgroundColor: colors.inputBackground,
+      borderRadius: 8,
+      padding: 15,
+      marginBottom: 20,
+      borderWidth: 1,
+      borderColor: colors.inputBorder,
+    },
+    infoText: {
+      color: colors.textPrimary,
+      fontSize: 14,
+      lineHeight: 20,
+    },
+  });
+
+const ResetPasswordScreen = ({ navigation }) => {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [hasRecoverySession, setHasRecoverySession] = useState(false);
-  const hasShownAlert = useRef(false);
+  const { passwordRecoveryActive, signOut } = useAuth();
+
+  const refreshSessionState = useCallback(async () => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    setHasRecoverySession(!!session);
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshSessionState();
+    }, [refreshSessionState])
+  );
 
   useEffect(() => {
-    // Check if we have a session with a password reset token
-    // This happens when user clicks the reset link in their email
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('Auth state change:', event, session?.user?.id);
-      if (event === 'PASSWORD_RECOVERY') {
-        // User has clicked the password reset link
-        console.log('Password recovery event detected - user can now reset password');
-        Alert.alert(
-          'Password Reset Ready',
-          'You can now set a new password below.',
-          [{ text: 'OK' }]
-        );
-      }
-    });
+    refreshSessionState();
+  }, [passwordRecoveryActive, refreshSessionState]);
 
-    // Also check on mount if we already have a recovery session
-    const checkRecoverySession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        console.log('Recovery session exists on mount:', session.user.id);
-        setHasRecoverySession(true);
-      } else {
-        console.log('No recovery session found');
-        setHasRecoverySession(false);
-      }
-    };
-    checkRecoverySession();
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, []);
+  const canSetPassword = passwordRecoveryActive || hasRecoverySession;
 
   const handleResetPassword = async () => {
     if (!password || !confirmPassword) {
@@ -72,15 +134,14 @@ const ResetPasswordScreen = ({ navigation, route }) => {
 
     setLoading(true);
     try {
-      console.log('Attempting to reset password...');
-      
-      // Check if we have a session (required for updateUser)
-      const { data: { session } } = await supabase.auth.getSession();
-      
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
       if (!session) {
         Alert.alert(
-          'Session Required',
-          'Please click the password reset link in your email first, then return to this screen to set your new password.',
+          'Open reset link',
+          'Open the link in your reset email — it will return you to this screen in the app. Then choose a new password.',
           [{ text: 'OK' }]
         );
         setLoading(false);
@@ -92,22 +153,19 @@ const ResetPasswordScreen = ({ navigation, route }) => {
       });
 
       if (error) {
-        console.error('Password reset error:', error);
         Alert.alert('Error', error.message || 'Failed to reset password. Please try again.');
         return;
       }
 
-      console.log('Password reset successful');
-      Alert.alert(
-        'Success',
-        'Your password has been reset. You can now login with your new password.',
-        [
-          {
-            text: 'OK',
-            onPress: () => navigation.navigate('Login'),
-          },
-        ]
+      await signOut();
+      navigation.dispatch(
+        CommonActions.reset({
+          index: 0,
+          routes: [{ name: 'Login' }],
+        })
       );
+
+      Alert.alert('Password updated', 'Sign in with your new password.', [{ text: 'OK' }]);
     } catch (error) {
       Alert.alert('Error', 'An unexpected error occurred');
       console.error('Password reset error:', error);
@@ -121,18 +179,19 @@ const ResetPasswordScreen = ({ navigation, route }) => {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
       <View style={styles.content}>
         <Text style={styles.title}>Reset Password</Text>
         <Text style={styles.subtitle}>
-          {hasRecoverySession 
-            ? 'Enter your new password below' 
-            : 'To reset your password:\n\n1. Request a password reset from the login screen\n2. Click the link in your email\n3. Return to this screen to set your new password'}
+          {canSetPassword
+            ? 'Enter your new password below.'
+            : 'Request a reset from the login screen, then tap the link in your email. The link opens Rolls and brings you back here to set a new password.'}
         </Text>
-        
-        {!hasRecoverySession && (
+
+        {!canSetPassword && (
           <View style={styles.infoBox}>
             <Text style={styles.infoText}>
-              💡 If the email link opens in a browser instead of the app, that's okay! Just return to the app and you can set your password here.
+              Tip: add rollsapp://reset-password to Supabase Auth → URL Configuration → Redirect URLs so the email link returns to the app.
             </Text>
           </View>
         )}
@@ -171,86 +230,12 @@ const ResetPasswordScreen = ({ navigation, route }) => {
           )}
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.linkButton}
-          onPress={() => navigation.navigate('Login')}
-        >
-          <Text style={styles.linkText}>
-            Back to Login
-          </Text>
+        <TouchableOpacity style={styles.linkButton} onPress={() => navigation.navigate('Login')}>
+          <Text style={styles.linkText}>Back to Login</Text>
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
   );
 };
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  content: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: 20,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 10,
-    textAlign: 'left',
-  },
-  subtitle: {
-    fontSize: 16,
-    color: colors.textSecondary,
-    marginBottom: 40,
-    textAlign: 'left',
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.inputBorder,
-    borderRadius: 8,
-    padding: 15,
-    marginBottom: 15,
-    fontSize: 16,
-    backgroundColor: colors.inputBackground,
-  },
-  button: {
-    backgroundColor: colors.buttonPrimary,
-    borderRadius: 8,
-    padding: 15,
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  buttonDisabled: {
-    backgroundColor: colors.buttonPrimaryDisabled,
-  },
-  buttonText: {
-    color: colors.buttonText,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  linkButton: {
-    marginTop: 20,
-    alignItems: 'center',
-  },
-  linkText: {
-    color: colors.link,
-    fontSize: 14,
-  },
-  infoBox: {
-    backgroundColor: colors.inputBackground,
-    borderRadius: 8,
-    padding: 15,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: colors.inputBorder,
-  },
-  infoText: {
-    color: colors.textPrimary,
-    fontSize: 14,
-    lineHeight: 20,
-  },
-});
 
 export default ResetPasswordScreen;

@@ -18,19 +18,23 @@ import {
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { launchImageLibrary } from 'react-native-image-picker';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useRolls } from '../contexts/RollsContext';
 import { setRollPublic } from '../services/publicProfile';
 import { uploadRollTitleImage } from '../services/storage';
 import { supabase } from '../lib/supabase';
-import colors from '../constants/colors';
+import { useTheme } from '../contexts/ThemeContext';
 
 const { width } = Dimensions.get('window');
 const RollsScreen = () => {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
+  const route = useRoute();
   const { rolls, loading, error, createRoll, updateRoll, deleteRoll, fetchRolls, getOwnedRolls, getContributedRolls } = useRolls();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -166,6 +170,16 @@ const RollsScreen = () => {
         lastFocusTimeRef.current = now;
       }
     }, [fetchRolls, fetchImageCounts]) // Include deps but use time-based guard
+  );
+
+  // Open create-roll modal when navigated from Camera (or elsewhere) with this param
+  useFocusEffect(
+    useCallback(() => {
+      if (route.params?.openCreateRoll) {
+        setShowCreateModal(true);
+        navigation.setParams({ openCreateRoll: undefined });
+      }
+    }, [navigation, route.params?.openCreateRoll])
   );
 
   // Process title images when rolls change
@@ -587,7 +601,7 @@ const RollsScreen = () => {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
       
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
@@ -1259,7 +1273,7 @@ const RollsScreen = () => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.backgroundLight,
@@ -1739,5 +1753,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+
+
 
 export default RollsScreen;

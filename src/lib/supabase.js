@@ -3,12 +3,18 @@ import { createClient } from '@supabase/supabase-js';
 // React Native polyfill for URL protocol property issue
 import 'react-native-url-polyfill/auto';
 
-// Supabase configuration
-const supabaseUrl = 'https://wdduwfzzwwmwxgttilga.supabase.co';
-const supabaseAnonKey = 'sb_publishable_xmgbCz7CHkxdE7lnntkygw_gj6vis9H';
+import { SUPABASE_ANON_KEY, SUPABASE_URL } from '@env';
 
-// Create Supabase client with React Native-specific options
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  throw new Error(
+    'Missing SUPABASE_URL or SUPABASE_ANON_KEY. Copy .env.example to .env and add your Supabase project values.',
+  );
+}
+
+/** Hostname from project URL — used to validate password-reset verify links. */
+export const supabaseProjectHostname = new URL(SUPABASE_URL).hostname;
+
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     storage: require('@react-native-async-storage/async-storage').default,
     autoRefreshToken: true,
@@ -16,4 +22,3 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     detectSessionInUrl: false,
   },
 });
-

@@ -1,8 +1,35 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import colors from '../constants/colors';
+import { useTheme } from '../contexts/ThemeContext';
+
+const createStyles = (colors) =>
+  StyleSheet.create({
+    badge: {
+      position: 'absolute',
+      top: -6,
+      right: -6,
+      backgroundColor: colors.notificationBadge,
+      borderRadius: 9,
+      minWidth: 18,
+      height: 18,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingHorizontal: 4,
+      borderWidth: 2,
+      borderColor: colors.navBackground,
+    },
+    badgeText: {
+      color: '#FFFFFF',
+      fontSize: 10,
+      fontWeight: 'bold',
+      lineHeight: 12,
+    },
+  });
 
 const NotificationBadge = ({ count }) => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   if (!count || count === 0) {
     return null;
   }
@@ -16,28 +43,4 @@ const NotificationBadge = ({ count }) => {
   );
 };
 
-const styles = StyleSheet.create({
-  badge: {
-    position: 'absolute',
-    top: -6,
-    right: -6,
-    backgroundColor: colors.notificationBadge,
-    borderRadius: 9,
-    minWidth: 18,
-    height: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 4,
-    borderWidth: 2,
-    borderColor: colors.navBackground, // Teal border to match nav background
-  },
-  badgeText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: 'bold',
-    lineHeight: 12,
-  },
-});
-
 export default NotificationBadge;
-

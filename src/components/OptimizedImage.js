@@ -1,18 +1,34 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Image, View, ActivityIndicator, StyleSheet } from 'react-native';
-import colors from '../constants/colors';
+import { useTheme } from '../contexts/ThemeContext';
+
+const createStyles = (colors) =>
+  StyleSheet.create({
+    container: {
+      backgroundColor: colors.inputBackground,
+    },
+    loadingContainer: {
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: colors.inputBackground,
+    },
+    hidden: {
+      opacity: 0,
+    },
+  });
 
 /**
  * Optimized Image component with loading states and error handling
- * Reduces perceived latency by showing loading indicators
  */
-const OptimizedImage = ({ 
-  source, 
-  style, 
+const OptimizedImage = ({
+  source,
+  style,
   resizeMode = 'cover',
   showLoadingIndicator = true,
-  ...props 
+  ...props
 }) => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
@@ -49,19 +65,5 @@ const OptimizedImage = ({
     </View>
   );
 };
-
-const styles = StyleSheet.create({
-  container: {
-    backgroundColor: colors.inputBackground,
-  },
-  loadingContainer: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.inputBackground,
-  },
-  hidden: {
-    opacity: 0,
-  },
-});
 
 export default OptimizedImage;

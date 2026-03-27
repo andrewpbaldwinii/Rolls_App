@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -17,9 +17,12 @@ import { getNotifications, getUnreadNotificationCount } from '../services/notifi
 import { getUnreadMessageCount } from '../services/messaging';
 import { acceptRollInvite, getPendingInvites } from '../services/rollInvites';
 import { useRolls } from '../contexts/RollsContext';
-import colors from '../constants/colors';
+import { useTheme } from '../contexts/ThemeContext';
 
 const NotificationsScreen = ({ navigation }) => {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { fetchRolls } = useRolls();
@@ -281,7 +284,7 @@ const NotificationsScreen = ({ navigation }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -436,6 +439,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+
+
 
 export default NotificationsScreen;
 

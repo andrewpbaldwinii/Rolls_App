@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -10,11 +10,76 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
+  StatusBar,
 } from 'react-native';
 import { supabase } from '../lib/supabase';
-import colors from '../constants/colors';
+import { useTheme } from '../contexts/ThemeContext';
+
+const createStyles = (colors) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    content: {
+      flex: 1,
+      justifyContent: 'center',
+      padding: 20,
+    },
+    logoContainer: {
+      alignItems: 'center',
+      marginTop: -60,
+      marginBottom: 40,
+    },
+    logo: {
+      width: 600,
+      height: 240,
+    },
+    title: {
+      fontSize: 24,
+      fontWeight: 'bold',
+      marginBottom: 40,
+      textAlign: 'left',
+      color: colors.textPrimary,
+    },
+    input: {
+      borderWidth: 1,
+      borderColor: colors.inputBorder,
+      borderRadius: 8,
+      padding: 15,
+      marginBottom: 15,
+      fontSize: 16,
+      backgroundColor: colors.inputBackground,
+      color: colors.textPrimary,
+    },
+    button: {
+      backgroundColor: colors.buttonPrimary,
+      borderRadius: 8,
+      padding: 15,
+      alignItems: 'center',
+      marginTop: 10,
+    },
+    buttonDisabled: {
+      backgroundColor: colors.buttonPrimaryDisabled,
+    },
+    buttonText: {
+      color: colors.buttonText,
+      fontSize: 16,
+      fontWeight: '600',
+    },
+    linkButton: {
+      marginTop: 20,
+      alignItems: 'center',
+    },
+    linkText: {
+      color: colors.link,
+      fontSize: 14,
+    },
+  });
 
 const LoginScreen = ({ navigation }) => {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -94,7 +159,8 @@ const LoginScreen = ({ navigation }) => {
                 { text: 'OK', style: 'cancel' },
                 {
                   text: 'Reset Password',
-                  onPress: () => handleForgotPassword(),
+                  onPress: () =>
+                    navigation.navigate('ForgotPassword', { email: email.trim() }),
                 },
               ]
             );
@@ -122,52 +188,12 @@ const LoginScreen = ({ navigation }) => {
     }
   };
 
-  const handleForgotPassword = async () => {
-    if (!email) {
-      Alert.alert(
-        'Email Required',
-        'Please enter your email address first, then tap "Forgot Password" again.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-
-    try {
-      // For mobile apps, we don't need a redirect URL - the user will reset password in-app
-      // The email will contain a token that can be used, but for simplicity,
-      // we'll let them reset directly in the app after receiving the email
-      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: 'rollsapp://reset-password',
-      });
-
-      if (error) {
-        Alert.alert('Error', error.message);
-        console.error('Password reset error:', error);
-        return;
-      }
-
-      Alert.alert(
-        'Password Reset Email Sent',
-        'Check your email for a password reset link. After clicking the link, you can set a new password in the app.',
-        [
-          { text: 'OK' },
-          {
-            text: 'Go to Reset Screen',
-            onPress: () => navigation.navigate('ResetPassword'),
-          },
-        ]
-      );
-    } catch (error) {
-      Alert.alert('Error', 'Failed to send password reset email');
-      console.error('Password reset error:', error);
-    }
-  };
-
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
       <View style={styles.content}>
         <View style={styles.logoContainer}>
           <Image
@@ -214,7 +240,7 @@ const LoginScreen = ({ navigation }) => {
 
         <TouchableOpacity
           style={styles.linkButton}
-          onPress={handleForgotPassword}
+          onPress={() => navigation.navigate('ForgotPassword')}
         >
           <Text style={styles.linkText}>
             Forgot Password?
@@ -233,65 +259,6 @@ const LoginScreen = ({ navigation }) => {
     </KeyboardAvoidingView>
   );
 };
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  content: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: 20,
-  },
-  logoContainer: {
-    alignItems: 'center',
-    marginTop: -60,
-    marginBottom: 40,
-  },
-  logo: {
-    width: 600,
-    height: 240,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 40,
-    textAlign: 'left',
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.inputBorder,
-    borderRadius: 8,
-    padding: 15,
-    marginBottom: 15,
-    fontSize: 16,
-    backgroundColor: colors.inputBackground,
-  },
-  button: {
-    backgroundColor: colors.buttonPrimary,
-    borderRadius: 8,
-    padding: 15,
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  buttonDisabled: {
-    backgroundColor: colors.buttonPrimaryDisabled,
-  },
-  buttonText: {
-    color: colors.buttonText,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  linkButton: {
-    marginTop: 20,
-    alignItems: 'center',
-  },
-  linkText: {
-    color: colors.link,
-    fontSize: 14,
-  },
-});
 
 export default LoginScreen;
 

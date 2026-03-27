@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,12 +18,16 @@ import { launchImageLibrary } from 'react-native-image-picker';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import { uploadProfileImage } from '../services/publicProfile';
-import colors from '../constants/colors';
+import { uploadProfileImage, clearProfileCache } from '../services/publicProfile';
+import { checkUsernameAvailable } from '../services/username';
+import { useTheme } from '../contexts/ThemeContext';
 
 const EditProfileScreen = ({ navigation }) => {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const insets = useSafeAreaInsets();
-  const { user } = useAuth();
+  const { user, refreshProfile } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -36,6 +40,7 @@ const EditProfileScreen = ({ navigation }) => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [avatarUrl, setAvatarUrl] = useState(null);
   const [profileImageUri, setProfileImageUri] = useState(null);
+  const [originalUsername, setOriginalUsername] = useState('');
 
   useEffect(() => {
     loadProfile();
@@ -56,7 +61,13 @@ const EditProfileScreen = ({ navigation }) => {
 
       if (error) throw error;
 
-      setUsername(data?.username || '');
+      const u =
+        data?.username ||
+        user?.user_metadata?.username ||
+        user?.user_metadata?.display_name ||
+        '';
+      setUsername(u);
+      setOriginalUsername((data?.username || '').trim());
       setEmail(data?.email || user?.email || '');
       setAvatarUrl(data?.avatar_url || null);
     } catch (error) {
@@ -263,6 +274,24 @@ const EditProfileScreen = ({ navigation }) => {
     setSaving(true);
 
     try {
+      const nextUsername = username.trim();
+      if (nextUsername !== originalUsername.trim()) {
+        const { available, error: unameErr } = await checkUsernameAvailable(
+          nextUsername,
+          user.id
+        );
+        if (unameErr) {
+          Alert.alert('Can’t verify username', unameErr.message);
+          setSaving(false);
+          return;
+        }
+        if (!available) {
+          Alert.alert('Error', 'This username is already taken. Please choose a different one.');
+          setSaving(false);
+          return;
+        }
+      }
+
       // 1. Upload profile picture if selected
       let finalAvatarUrl = avatarUrl;
       if (profileImageUri) {
@@ -277,8 +306,8 @@ const EditProfileScreen = ({ navigation }) => {
       const { error: profileError } = await supabase
         .from('users')
         .update({
-          username: username.trim(),
-          display_name: username.trim(), // Keep them in sync
+          username: nextUsername,
+          display_name: nextUsername, // Keep them in sync
           avatar_url: finalAvatarUrl,
         })
         .eq('id', user.id);
@@ -292,6 +321,16 @@ const EditProfileScreen = ({ navigation }) => {
         }
         throw profileError;
       }
+
+      await supabase.auth.updateUser({
+        data: {
+          username: nextUsername,
+          display_name: nextUsername,
+        },
+      });
+      setOriginalUsername(nextUsername);
+      clearProfileCache(user.id);
+      await refreshProfile();
 
       // 3. Update email if changed
       if (email !== user.email) {
@@ -542,7 +581,7 @@ const EditProfileScreen = ({ navigation }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.backgroundLight,
@@ -674,6 +713,8 @@ const styles = StyleSheet.create({
     height: 20,
   },
 });
+
+
 
 export default EditProfileScreen;
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
@@ -42,7 +42,7 @@ import {
   PHOTO_TYPES,
 } from '../services/interactions';
 import { FlatList, RefreshControl, TextInput, KeyboardAvoidingView } from 'react-native';
-import colors from '../constants/colors';
+import { useTheme } from '../contexts/ThemeContext';
 
 const { width } = Dimensions.get('window');
 // Calculate grid size for exactly 3 columns
@@ -52,6 +52,9 @@ const { width } = Dimensions.get('window');
 const GRID_SIZE = Math.floor((width - 2) / 3); // 3 columns: account for 2px total margins between items
 
 const PublicProfileScreen = ({ route, navigation }) => {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const insets = useSafeAreaInsets();
   const { user: currentUser } = useAuth();
   const userId = route?.params?.userId || currentUser?.id;
@@ -1191,7 +1194,7 @@ const PublicProfileScreen = ({ route, navigation }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.backgroundLight,
@@ -1691,6 +1694,8 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
 });
+
+
 
 export default PublicProfileScreen;
 

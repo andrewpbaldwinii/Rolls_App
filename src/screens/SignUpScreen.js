@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -10,11 +10,77 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
+  StatusBar,
 } from 'react-native';
 import { supabase } from '../lib/supabase';
-import colors from '../constants/colors';
+import { checkUsernameAvailable } from '../services/username';
+import { useTheme } from '../contexts/ThemeContext';
+
+const createStyles = (colors) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    content: {
+      flex: 1,
+      justifyContent: 'center',
+      padding: 20,
+    },
+    logoContainer: {
+      alignItems: 'center',
+      marginTop: -60,
+      marginBottom: 40,
+    },
+    logo: {
+      width: 600,
+      height: 240,
+    },
+    title: {
+      fontSize: 24,
+      fontWeight: 'bold',
+      marginBottom: 40,
+      textAlign: 'left',
+      color: colors.textPrimary,
+    },
+    input: {
+      borderWidth: 1,
+      borderColor: colors.inputBorder,
+      borderRadius: 8,
+      padding: 15,
+      marginBottom: 15,
+      fontSize: 16,
+      backgroundColor: colors.inputBackground,
+      color: colors.textPrimary,
+    },
+    button: {
+      backgroundColor: colors.buttonPrimary,
+      borderRadius: 8,
+      padding: 15,
+      alignItems: 'center',
+      marginTop: 10,
+    },
+    buttonDisabled: {
+      backgroundColor: colors.buttonPrimaryDisabled,
+    },
+    buttonText: {
+      color: colors.buttonText,
+      fontSize: 16,
+      fontWeight: '600',
+    },
+    linkButton: {
+      marginTop: 20,
+      alignItems: 'center',
+    },
+    linkText: {
+      color: colors.link,
+      fontSize: 14,
+    },
+  });
 
 const SignUpScreen = ({ navigation }) => {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -49,13 +115,40 @@ const SignUpScreen = ({ navigation }) => {
     }
 
     setLoading(true);
+    const trimmedUsername = username.trim();
+
     try {
       console.log('Starting signup process...');
-      
-      // Create auth account
+
+      const { available, error: usernameCheckError } = await checkUsernameAvailable(
+        trimmedUsername,
+        null
+      );
+      if (usernameCheckError) {
+        Alert.alert(
+          'Can’t verify username',
+          usernameCheckError.message +
+            '\n\nIf this persists, confirm USERNAME_AVAILABILITY_RPC.sql was run in Supabase.',
+        );
+        setLoading(false);
+        return;
+      }
+      if (!available) {
+        Alert.alert('Username taken', 'That username is already in use. Please pick another.');
+        setLoading(false);
+        return;
+      }
+
+      // Create auth account — stash username in JWT metadata for instant UI after login
       const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
         password: password,
+        options: {
+          data: {
+            username: trimmedUsername,
+            display_name: trimmedUsername,
+          },
+        },
       });
 
       if (error) {
@@ -87,8 +180,6 @@ const SignUpScreen = ({ navigation }) => {
         
         console.log('Profile check result:', { existingProfile, checkError });
         
-        const trimmedUsername = username.trim();
-        
         // Try to update the profile with the username (trigger creates it with email-based default)
         // Make sure username and display_name are coordinated
         const { error: profileError } = await supabase
@@ -115,15 +206,16 @@ const SignUpScreen = ({ navigation }) => {
           // Wait a bit more and try again
           await new Promise(resolve => setTimeout(resolve, 1000));
           
-          // Check if username is already taken
-          const { data: usernameCheck } = await supabase
-            .from('users')
-            .select('id')
-            .eq('username', trimmedUsername)
-            .neq('id', data.user.id)
-            .single();
-          
-          if (usernameCheck) {
+          const { available: stillAvailable, error: rpcErr } = await checkUsernameAvailable(
+            trimmedUsername,
+            data.user.id
+          );
+          if (rpcErr) {
+            Alert.alert('Can’t verify username', rpcErr.message, [{ text: 'OK' }]);
+            setLoading(false);
+            return;
+          }
+          if (!stillAvailable) {
             Alert.alert(
               'Username Taken',
               'This username is already taken. Please choose a different one.',
@@ -177,6 +269,19 @@ const SignUpScreen = ({ navigation }) => {
           console.log('Profile updated successfully!');
         }
 
+        // Keep JWT user_metadata in sync when a session exists (e.g. email confirm disabled)
+        const {
+          data: { session: postSession },
+        } = await supabase.auth.getSession();
+        if (postSession) {
+          await supabase.auth.updateUser({
+            data: {
+              username: trimmedUsername,
+              display_name: trimmedUsername,
+            },
+          });
+        }
+
         Alert.alert(
           'Success',
           'Account created! Please check your email for verification.',
@@ -201,6 +306,7 @@ const SignUpScreen = ({ navigation }) => {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
       <View style={styles.content}>
         <View style={styles.logoContainer}>
           <Image
@@ -279,65 +385,6 @@ const SignUpScreen = ({ navigation }) => {
     </KeyboardAvoidingView>
   );
 };
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  content: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: 20,
-  },
-  logoContainer: {
-    alignItems: 'center',
-    marginTop: -60,
-    marginBottom: 40,
-  },
-  logo: {
-    width: 600,
-    height: 240,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 40,
-    textAlign: 'left',
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.inputBorder,
-    borderRadius: 8,
-    padding: 15,
-    marginBottom: 15,
-    fontSize: 16,
-    backgroundColor: colors.inputBackground,
-  },
-  button: {
-    backgroundColor: colors.buttonPrimary,
-    borderRadius: 8,
-    padding: 15,
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  buttonDisabled: {
-    backgroundColor: colors.buttonPrimaryDisabled,
-  },
-  buttonText: {
-    color: colors.buttonText,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  linkButton: {
-    marginTop: 20,
-    alignItems: 'center',
-  },
-  linkText: {
-    color: colors.link,
-    fontSize: 14,
-  },
-});
 
 export default SignUpScreen;
 

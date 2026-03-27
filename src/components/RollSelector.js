@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -10,7 +10,143 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useRolls } from '../contexts/RollsContext';
-import colors from '../constants/colors';
+import { useTheme } from '../contexts/ThemeContext';
+
+const createStyles = (colors) =>
+  StyleSheet.create({
+    modalOverlay: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    modalBackdrop: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    },
+    modalContent: {
+      backgroundColor: colors.background,
+      borderRadius: 20,
+      width: '90%',
+      maxWidth: 400,
+      maxHeight: '80%',
+      shadowColor: '#000',
+      shadowOffset: {
+        width: 0,
+        height: 4,
+      },
+      shadowOpacity: 0.3,
+      shadowRadius: 8,
+      elevation: 8,
+    },
+    modalHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      padding: 20,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.inputBorder,
+    },
+    modalTitle: {
+      fontSize: 20,
+      fontWeight: 'bold',
+      color: colors.textPrimary,
+    },
+    closeButton: {
+      padding: 4,
+    },
+    rollList: {
+      flex: 1,
+    },
+    rollListContent: {
+      padding: 16,
+    },
+    listHeader: {
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+    },
+    listHeaderTitle: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: colors.textPrimary,
+    },
+    listHeaderSubtitle: {
+      fontSize: 12,
+      color: colors.textSecondary,
+      marginTop: 2,
+    },
+    rollItem: {
+      backgroundColor: colors.background,
+      borderRadius: 12,
+      marginBottom: 12,
+      borderWidth: 1,
+      borderColor: colors.inputBorder,
+    },
+    rollItemSelected: {
+      borderColor: colors.buttonPrimary,
+      borderWidth: 2,
+      backgroundColor: colors.inputBackground,
+    },
+    rollItemContent: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      padding: 16,
+    },
+    rollItemLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flex: 1,
+    },
+    rollItemText: {
+      marginLeft: 12,
+      flex: 1,
+    },
+    rollItemName: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: colors.textPrimary,
+      marginBottom: 4,
+    },
+    rollItemNameSelected: {
+      color: colors.buttonPrimary,
+    },
+    rollItemDescription: {
+      fontSize: 14,
+      color: colors.textSecondary,
+    },
+    loadingContainer: {
+      padding: 40,
+      alignItems: 'center',
+    },
+    emptyContainer: {
+      padding: 40,
+      alignItems: 'center',
+    },
+    emptyText: {
+      fontSize: 18,
+      fontWeight: '600',
+      color: colors.textPrimary,
+      marginTop: 16,
+      marginBottom: 8,
+    },
+    emptySubtext: {
+      fontSize: 14,
+      color: colors.textSecondary,
+      textAlign: 'center',
+    },
+    retryButton: {
+      marginTop: 16,
+      backgroundColor: colors.buttonPrimary,
+      paddingHorizontal: 20,
+      paddingVertical: 12,
+      borderRadius: 8,
+    },
+    retryButtonText: {
+      color: colors.buttonText,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+  });
 
 const RollSelector = ({
   visible,
@@ -19,17 +155,17 @@ const RollSelector = ({
   selectedRollId = null,
   availableRolls,
 }) => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const { loading, getOwnedRolls, getContributedRolls, fetchRolls } = useRolls();
 
   const ownedRolls = availableRolls ? availableRolls : getOwnedRolls();
   const contributedRolls = availableRolls ? [] : getContributedRolls();
 
   const displayedRolls = [...ownedRolls, ...contributedRolls]
-    // Show everything except archived; but if no status, still show
-    .filter(roll => (roll?.status || '').toLowerCase() !== 'archived')
+    .filter((roll) => (roll?.status || '').toLowerCase() !== 'archived')
     .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
 
-  // Refresh rolls when modal opens to ensure new rolls appear (only if we are using context rolls)
   useEffect(() => {
     if (visible && !availableRolls) {
       fetchRolls();
@@ -43,7 +179,7 @@ const RollSelector = ({
 
   const renderRollItem = ({ item }) => {
     const isSelected = item.id === selectedRollId;
-    const isOwned = ownedRolls.some(r => r.id === item.id);
+    const isOwned = ownedRolls.some((r) => r.id === item.id);
 
     return (
       <TouchableOpacity
@@ -78,18 +214,9 @@ const RollSelector = ({
   };
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-    >
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
-        <TouchableOpacity 
-          style={styles.modalBackdrop}
-          activeOpacity={1}
-          onPress={onClose}
-        />
+        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={onClose} />
         <View style={styles.modalContent}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Select a Roll</Text>
@@ -106,9 +233,7 @@ const RollSelector = ({
             <View style={styles.emptyContainer}>
               <Ionicons name="camera-outline" size={48} color={colors.textSecondary} />
               <Text style={styles.emptyText}>No active rolls available</Text>
-              <Text style={styles.emptySubtext}>
-                Create a roll first to add photos
-              </Text>
+              <Text style={styles.emptySubtext}>Create a roll first to add photos</Text>
               <TouchableOpacity style={styles.retryButton} onPress={fetchRolls}>
                 <Text style={styles.retryButtonText}>Reload Rolls</Text>
               </TouchableOpacity>
@@ -123,7 +248,9 @@ const RollSelector = ({
               ListHeaderComponent={
                 <View style={styles.listHeader}>
                   <Text style={styles.listHeaderTitle}>Choose a roll</Text>
-                  <Text style={styles.listHeaderSubtitle}>Tap a roll to send your photo there</Text>
+                  <Text style={styles.listHeaderSubtitle}>
+                    Tap a roll to send your photo there
+                  </Text>
                 </View>
               }
             />
@@ -134,140 +261,4 @@ const RollSelector = ({
   );
 };
 
-const styles = StyleSheet.create({
-  modalOverlay: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-  },
-  modalContent: {
-    backgroundColor: colors.background,
-    borderRadius: 20,
-    width: '90%',
-    maxWidth: 400,
-    maxHeight: '80%',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.inputBorder,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: colors.textPrimary,
-  },
-  closeButton: {
-    padding: 4,
-  },
-  rollList: {
-    flex: 1,
-  },
-  rollListContent: {
-    padding: 16,
-  },
-  listHeader: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  listHeaderTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  listHeaderSubtitle: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    marginTop: 2,
-  },
-  rollItem: {
-    backgroundColor: colors.background,
-    borderRadius: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: colors.inputBorder,
-  },
-  rollItemSelected: {
-    borderColor: colors.buttonPrimary,
-    borderWidth: 2,
-    backgroundColor: colors.inputBackground,
-  },
-  rollItemContent: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-  },
-  rollItemLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  rollItemText: {
-    marginLeft: 12,
-    flex: 1,
-  },
-  rollItemName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    marginBottom: 4,
-  },
-  rollItemNameSelected: {
-    color: colors.buttonPrimary,
-  },
-  rollItemDescription: {
-    fontSize: 14,
-    color: colors.textSecondary,
-  },
-  loadingContainer: {
-    padding: 40,
-    alignItems: 'center',
-  },
-  emptyContainer: {
-    padding: 40,
-    alignItems: 'center',
-  },
-  emptyText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  emptySubtext: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    textAlign: 'center',
-  },
-  retryButton: {
-    marginTop: 16,
-    backgroundColor: colors.buttonPrimary,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  retryButtonText: {
-    color: colors.buttonText,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-});
-
 export default RollSelector;
-

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,24 +13,264 @@ import {
   FlatList,
   RefreshControl,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../contexts/AuthContext';
+import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
-import { getUserPhotos, getPublicProfile } from '../services/publicProfile';
-import colors from '../constants/colors';
+import { getUserPhotos, getPublicProfile, clearProfileCache } from '../services/publicProfile';
+import { useTheme } from '../contexts/ThemeContext';
 import OptimizedImage from '../components/OptimizedImage';
 
 const { width } = Dimensions.get('window');
 const GRID_SIZE = (width - 60) / 3; // 3 columns with margins
 
+const createStyles = (colors) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.backgroundLight,
+    },
+    header: {
+      backgroundColor: colors.navBackground,
+      paddingBottom: 20,
+      paddingHorizontal: 20,
+    },
+    headerTitle: {
+      fontSize: 28,
+      fontWeight: 'bold',
+      color: colors.textWhite,
+    },
+    scrollView: {
+      flex: 1,
+    },
+    scrollContent: {
+      paddingBottom: 20,
+    },
+    profileCard: {
+      backgroundColor: colors.background,
+      marginTop: -10,
+      marginHorizontal: 20,
+      borderRadius: 12,
+      padding: 20,
+      marginBottom: 20,
+      alignItems: 'center',
+      shadowColor: '#000',
+      shadowOffset: {
+        width: 0,
+        height: 2,
+      },
+      shadowOpacity: 0.1,
+      shadowRadius: 4,
+      elevation: 3,
+    },
+    profilePictureContainer: {
+      marginBottom: 16,
+    },
+    profilePicture: {
+      width: 80,
+      height: 80,
+      borderRadius: 40,
+      backgroundColor: colors.primary,
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderWidth: 3,
+      borderColor: colors.primaryDark,
+      overflow: 'hidden',
+    },
+    profileInitials: {
+      fontSize: 32,
+      fontWeight: 'bold',
+      color: colors.textWhite,
+    },
+    displayName: {
+      fontSize: 24,
+      fontWeight: 'bold',
+      color: colors.textPrimary,
+      marginBottom: 4,
+      textAlign: 'center',
+    },
+    username: {
+      fontSize: 14,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      marginBottom: 24,
+    },
+    displayNameMuted: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      marginBottom: 4,
+      textAlign: 'center',
+    },
+    usernameMuted: {
+      fontSize: 14,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      marginBottom: 24,
+      opacity: 0,
+    },
+    statsRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-around',
+      alignItems: 'center',
+      width: '100%',
+      paddingTop: 20,
+      borderTopWidth: 1,
+      borderTopColor: colors.inputBorder,
+    },
+    statItem: {
+      alignItems: 'center',
+      flex: 1,
+    },
+    statNumber: {
+      fontSize: 28,
+      fontWeight: 'bold',
+      color: colors.textPrimary,
+      marginBottom: 4,
+    },
+    statLabel: {
+      fontSize: 12,
+      color: colors.textSecondary,
+      textAlign: 'center',
+    },
+    sectionCard: {
+      backgroundColor: colors.background,
+      marginHorizontal: 20,
+      marginBottom: 20,
+      borderRadius: 12,
+      paddingVertical: 10,
+      shadowColor: '#000',
+      shadowOffset: {
+        width: 0,
+        height: 2,
+      },
+      shadowOpacity: 0.1,
+      shadowRadius: 4,
+      elevation: 3,
+    },
+    sectionTitle: {
+      fontSize: 16,
+      fontWeight: 'bold',
+      color: colors.primaryDark,
+      paddingHorizontal: 20,
+      paddingTop: 16,
+      paddingBottom: 12,
+    },
+    settingItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 20,
+      paddingVertical: 14,
+      borderTopWidth: 1,
+      borderTopColor: colors.inputBorder,
+    },
+    settingItemLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flex: 1,
+    },
+    settingIcon: {
+      marginRight: 12,
+    },
+    settingLabel: {
+      fontSize: 16,
+      color: colors.textPrimary,
+    },
+    signOutButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.background,
+      marginHorizontal: 20,
+      marginTop: 10,
+      marginBottom: 20,
+      borderRadius: 12,
+      padding: 16,
+      borderWidth: 1,
+      borderColor: colors.buttonSecondary,
+    },
+    signOutIcon: {
+      marginRight: 8,
+    },
+    signOutText: {
+      color: colors.buttonSecondary,
+      fontSize: 16,
+      fontWeight: '600',
+    },
+    bottomSpacing: {
+      height: 20,
+    },
+    photosLoading: {
+      padding: 40,
+      alignItems: 'center',
+    },
+    loadingText: {
+      color: colors.textSecondary,
+      fontSize: 14,
+    },
+    emptyPhotos: {
+      padding: 40,
+      alignItems: 'center',
+    },
+    emptyPhotosText: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: colors.textPrimary,
+      marginTop: 12,
+      marginBottom: 4,
+    },
+    emptyPhotosSubtext: {
+      fontSize: 14,
+      color: colors.textSecondary,
+    },
+    photosGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      padding: 10,
+      justifyContent: 'flex-start',
+    },
+    photoGridItem: {
+      width: GRID_SIZE,
+      height: GRID_SIZE,
+      margin: 5,
+      borderRadius: 8,
+      overflow: 'hidden',
+      backgroundColor: colors.inputBackground,
+    },
+    photoGridImage: {
+      width: '100%',
+      height: '100%',
+    },
+    morePhotosOverlay: {
+      width: '100%',
+      height: '100%',
+      backgroundColor: colors.inputBackground,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    morePhotosText: {
+      fontSize: 20,
+      fontWeight: 'bold',
+      color: colors.primary,
+      marginBottom: 4,
+    },
+    morePhotosLabel: {
+      fontSize: 12,
+      color: colors.textSecondary,
+    },
+  });
+
 const ProfileScreen = ({ navigation }) => {
-  const { user, signOut } = useAuth();
+  const { user, signOut, profile: authProfile, profileLoading, refreshProfile } = useAuth();
   const insets = useSafeAreaInsets();
+  const { colors, setDarkMode, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
-  const [darkModeEnabled, setDarkModeEnabled] = useState(false);
   const [userProfile, setUserProfile] = useState(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [userPhotos, setUserPhotos] = useState([]);
@@ -40,7 +280,7 @@ const ProfileScreen = ({ navigation }) => {
   const [profileIsPublic, setProfileIsPublic] = useState(true);
   const [updatingProfilePrivacy, setUpdatingProfilePrivacy] = useState(false);
 
-  // Fetch user profile from public.users table with stats
+  // Stats (and any extra fields) from getPublicProfile; identity comes from AuthContext.profile
   const fetchUserProfile = async () => {
     if (!user?.id) {
       setLoadingProfile(false);
@@ -48,9 +288,9 @@ const ProfileScreen = ({ navigation }) => {
     }
 
     try {
-      // Use getPublicProfile to get profile with accurate stats
-      const profileData = await getPublicProfile(user.id);
-      
+      clearProfileCache(user.id);
+      const profileData = await getPublicProfile(user.id, true);
+
       if (profileData) {
         setUserProfile({
           username: profileData.username,
@@ -58,35 +298,12 @@ const ProfileScreen = ({ navigation }) => {
           email: profileData.email,
           avatar_url: profileData.avatar_url,
         });
-        
-        // Set stats from the profile data
         if (profileData.stats) {
           setStats(profileData.stats);
         }
-      } else {
-        // Fallback to basic query if getPublicProfile fails
-        const { data, error } = await supabase
-          .from('users')
-          .select('username, display_name, email, avatar_url')
-          .eq('id', user.id)
-          .single();
-
-        if (error) {
-          console.error('Error fetching user profile:', error);
-          setUserProfile({
-            username: user.email?.split('@')[0] || 'user',
-            display_name: user.email?.split('@')[0] || 'User',
-          });
-        } else {
-          setUserProfile(data);
-        }
       }
     } catch (error) {
-      console.error('Error fetching profile:', error);
-      setUserProfile({
-        username: user.email?.split('@')[0] || 'user',
-        display_name: user.email?.split('@')[0] || 'User',
-      });
+      console.error('Error fetching profile stats:', error);
     } finally {
       setLoadingProfile(false);
     }
@@ -116,9 +333,28 @@ const ProfileScreen = ({ navigation }) => {
   };
 
   useEffect(() => {
+    setLoadingProfile(true);
     fetchUserProfile();
     fetchProfilePrivacy();
   }, [user?.id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshProfile();
+    }, [refreshProfile])
+  );
+
+  // Merge AuthContext profile (fast path after login) with stats fetch
+  useEffect(() => {
+    if (!authProfile) return;
+    setUserProfile(prev => ({
+      ...prev,
+      username: authProfile.username ?? prev?.username,
+      display_name: authProfile.display_name ?? prev?.display_name,
+      email: authProfile.email ?? prev?.email ?? user?.email,
+      avatar_url: authProfile.avatar_url ?? prev?.avatar_url,
+    }));
+  }, [authProfile, user?.email]);
 
   // Fetch user photos
   const fetchUserPhotos = async () => {
@@ -148,8 +384,8 @@ const ProfileScreen = ({ navigation }) => {
   const onRefresh = async () => {
     setRefreshing(true);
     try {
-      // Refresh profile (which includes stats), and photos
       await Promise.all([
+        refreshProfile(),
         fetchUserProfile(),
         fetchUserPhotos(),
       ]);
@@ -168,14 +404,40 @@ const ProfileScreen = ({ navigation }) => {
     }
   };
 
-  // Get user display name and username from profile, with fallbacks
-  const displayName = userProfile?.display_name || 
-                     userProfile?.username ||
-                     user?.email?.split('@')[0] || 
-                     'User';
-  const username = userProfile?.username || 
-                  user?.email?.split('@')[0] || 
-                  'user';
+  const metaDisplay =
+    user?.user_metadata?.display_name || user?.user_metadata?.username;
+  const metaUsername = user?.user_metadata?.username;
+  const fromRow =
+    userProfile?.display_name ||
+    userProfile?.username ||
+    authProfile?.display_name ||
+    authProfile?.username;
+
+  const hasIdentity =
+    !!(userProfile?.username ||
+      userProfile?.display_name ||
+      authProfile?.username ||
+      authProfile?.display_name ||
+      metaDisplay);
+
+  // No email flash: wait for auth profile fetch unless JWT already has metadata from signup
+  const showIdentityPlaceholder = profileLoading && !hasIdentity;
+
+  const displayName =
+    userProfile?.display_name ||
+    userProfile?.username ||
+    authProfile?.display_name ||
+    authProfile?.username ||
+    metaDisplay ||
+    (!profileLoading ? user?.email?.split('@')[0] : null) ||
+    'User';
+  const username =
+    userProfile?.username ||
+    authProfile?.username ||
+    metaUsername ||
+    metaDisplay ||
+    (!profileLoading ? user?.email?.split('@')[0] : null) ||
+    'user';
   
   // Get initials for profile picture
   const getInitials = (name) => {
@@ -185,7 +447,9 @@ const ProfileScreen = ({ navigation }) => {
     }
     return name.substring(0, 2).toUpperCase();
   };
-  const initials = getInitials(displayName);
+  const initials = getInitials(
+    (fromRow || metaDisplay || displayName || 'User').replace(/^@/, '')
+  );
 
   // Toggle profile privacy
   const handleToggleProfilePrivacy = async (value) => {
@@ -269,12 +533,16 @@ const ProfileScreen = ({ navigation }) => {
         <View style={styles.profileCard}>
           {/* Profile Picture */}
           <View style={styles.profilePictureContainer}>
-            {userProfile?.avatar_url ? (
+            {showIdentityPlaceholder ? (
+              <View style={styles.profilePicture}>
+                <ActivityIndicator size="small" color={colors.buttonPrimary} />
+              </View>
+            ) : userProfile?.avatar_url || authProfile?.avatar_url ? (
               <OptimizedImage
-                source={{ uri: userProfile.avatar_url }}
+                source={{ uri: userProfile?.avatar_url || authProfile?.avatar_url }}
                 style={styles.profilePicture}
                 resizeMode="cover"
-                showLoadingIndicator={false}
+                showLoadingIndicator={true}
               />
             ) : (
               <View style={styles.profilePicture}>
@@ -284,8 +552,17 @@ const ProfileScreen = ({ navigation }) => {
           </View>
           
           {/* User Name */}
-          <Text style={styles.displayName}>{displayName}</Text>
-          <Text style={styles.username}>@{username}</Text>
+          {showIdentityPlaceholder ? (
+            <>
+              <Text style={styles.displayNameMuted}>Loading profile…</Text>
+              <Text style={styles.usernameMuted}> </Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.displayName}>{displayName}</Text>
+              <Text style={styles.username}>@{username}</Text>
+            </>
+          )}
 
           {/* Stats Row */}
           <View style={styles.statsRow}>
@@ -471,8 +748,8 @@ const ProfileScreen = ({ navigation }) => {
               <Text style={styles.settingLabel}>Dark Mode</Text>
             </View>
             <Switch
-              value={darkModeEnabled}
-              onValueChange={setDarkModeEnabled}
+              value={isDark}
+              onValueChange={setDarkMode}
               trackColor={{ false: colors.inputBorder, true: colors.primary }}
               thumbColor={colors.textWhite}
             />
@@ -511,227 +788,5 @@ const ProfileScreen = ({ navigation }) => {
     </View>
   );
 };
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.backgroundLight,
-  },
-  header: {
-    backgroundColor: colors.navBackground, // Teal #2DB3AA
-    paddingBottom: 20,
-    paddingHorizontal: 20,
-  },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: colors.textWhite,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingBottom: 20,
-  },
-  profileCard: {
-    backgroundColor: colors.background,
-    marginTop: -10,
-    marginHorizontal: 20,
-    borderRadius: 12,
-    padding: 20,
-    marginBottom: 20,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  profilePictureContainer: {
-    marginBottom: 16,
-  },
-  profilePicture: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 3,
-    borderColor: colors.primaryDark,
-    overflow: 'hidden',
-  },
-  profileInitials: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: colors.textWhite,
-  },
-  displayName: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: colors.textPrimary,
-    marginBottom: 4,
-    textAlign: 'center',
-  },
-  username: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    width: '100%',
-    paddingTop: 20,
-    borderTopWidth: 1,
-    borderTopColor: colors.inputBorder,
-  },
-  statItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  statNumber: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: colors.textPrimary,
-    marginBottom: 4,
-  },
-  statLabel: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    textAlign: 'center',
-  },
-  sectionCard: {
-    backgroundColor: colors.background,
-    marginHorizontal: 20,
-    marginBottom: 20,
-    borderRadius: 12,
-    paddingVertical: 10,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: colors.primaryDark,
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 12,
-  },
-  settingItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderTopWidth: 1,
-    borderTopColor: colors.inputBorder,
-  },
-  settingItemLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  settingIcon: {
-    marginRight: 12,
-  },
-  settingLabel: {
-    fontSize: 16,
-    color: colors.textPrimary,
-  },
-  signOutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.background,
-    marginHorizontal: 20,
-    marginTop: 10,
-    marginBottom: 20,
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: colors.buttonSecondary,
-  },
-  signOutIcon: {
-    marginRight: 8,
-  },
-  signOutText: {
-    color: colors.buttonSecondary,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  bottomSpacing: {
-    height: 20,
-  },
-  photosLoading: {
-    padding: 40,
-    alignItems: 'center',
-  },
-  loadingText: {
-    color: colors.textSecondary,
-    fontSize: 14,
-  },
-  emptyPhotos: {
-    padding: 40,
-    alignItems: 'center',
-  },
-  emptyPhotosText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    marginTop: 12,
-    marginBottom: 4,
-  },
-  emptyPhotosSubtext: {
-    fontSize: 14,
-    color: colors.textSecondary,
-  },
-  photosGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    padding: 10,
-    justifyContent: 'flex-start',
-  },
-  photoGridItem: {
-    width: GRID_SIZE,
-    height: GRID_SIZE,
-    margin: 5,
-    borderRadius: 8,
-    overflow: 'hidden',
-    backgroundColor: colors.inputBackground,
-  },
-  photoGridImage: {
-    width: '100%',
-    height: '100%',
-  },
-  morePhotosOverlay: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: colors.inputBackground,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  morePhotosText: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: colors.primary,
-    marginBottom: 4,
-  },
-  morePhotosLabel: {
-    fontSize: 12,
-    color: colors.textSecondary,
-  },
-});
 
 export default ProfileScreen;

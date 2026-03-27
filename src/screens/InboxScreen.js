@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -14,9 +14,12 @@ import { useFocusEffect } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../contexts/AuthContext';
 import { getConversations, getUnreadMessageCount } from '../services/messaging';
-import colors from '../constants/colors';
+import { useTheme } from '../contexts/ThemeContext';
 
 const InboxScreen = ({ navigation }) => {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const [conversations, setConversations] = useState([]);
@@ -185,7 +188,7 @@ const InboxScreen = ({ navigation }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -301,5 +304,7 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
 });
+
+
 
 export default InboxScreen;
