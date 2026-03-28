@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -14,8 +14,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../contexts/AuthContext';
-import { acceptRollInviteByToken, declineRollInvite } from '../services/rollInvites';
-import { supabase } from '../lib/supabase';
+import { useRolls } from '../contexts/RollsContext';
+import {
+  getRollInvitePreviewByToken,
+  acceptRollInviteByToken,
+  declineRollInviteByToken,
+} from '../services/rollInvites';
 import { useTheme } from '../contexts/ThemeContext';
 import OptimizedImage from '../components/OptimizedImage';
 
@@ -26,14 +30,53 @@ const InviteConfirmationScreen = () => {
   const navigation = useNavigation();
   const route = useRoute();
   const insets = useSafeAreaInsets();
-  const { inviteToken } = route.params || {};
-  const { user } = useAuth();
+  const { inviteToken, completeAfterLogin } = route.params || {};
+  const { user, setPendingInviteToken, clearPendingInviteToken, setPendingInviteAcceptAfterLogin } =
+    useAuth();
+  const { fetchRolls } = useRolls();
 
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [roll, setRoll] = useState(null);
   const [inviter, setInviter] = useState(null);
   const [error, setError] = useState(null);
+  const autoAcceptStartedRef = useRef(false);
+
+  // After "Yes, join" → login, AuthNavigator sends completeAfterLogin to accept without a second tap
+  useEffect(() => {
+    if (!completeAfterLogin || !user || !inviteToken) return;
+    if (autoAcceptStartedRef.current) return;
+    autoAcceptStartedRef.current = true;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        setProcessing(true);
+        const rollId = await acceptRollInviteByToken(inviteToken);
+        clearPendingInviteToken();
+        await fetchRolls();
+        if (!cancelled) {
+          navigation.reset({
+            index: 1,
+            routes: [
+              { name: 'MainTabs' },
+              { name: 'RollDetail', params: { rollId } },
+            ],
+          });
+        }
+      } catch (err) {
+        if (!cancelled) {
+          autoAcceptStartedRef.current = false;
+          Alert.alert('Error', err.message || 'Failed to join this Roll');
+        }
+      } finally {
+        if (!cancelled) setProcessing(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [completeAfterLogin, user, inviteToken, navigation, fetchRolls, clearPendingInviteToken]);
 
   useEffect(() => {
     if (!inviteToken) {
@@ -49,27 +92,24 @@ const InviteConfirmationScreen = () => {
       setLoading(true);
       setError(null);
 
-      // Find the invite by token
-      const { data: invite, error: inviteError } = await supabase
-        .from('roll_invites')
-        .select(`
-          *,
-          roll:rolls(*),
-          inviter:users!roll_invites_inviter_id_fkey(id, username, display_name, avatar_url)
-        `)
-        .eq('invite_token', inviteToken)
-        .eq('status', 'pending')
-        .single();
-
-      if (inviteError || !invite) {
-        throw new Error('Invite not found or already processed');
+      // SECURITY DEFINER RPC — direct select on roll_invites fails for contributors (RLS).
+      const data = await getRollInvitePreviewByToken(inviteToken);
+      const parsed =
+        typeof data === 'string' ? JSON.parse(data) : data;
+      if (!parsed?.roll || !parsed?.inviter) {
+        throw new Error('Invalid invite response');
       }
-
-      setRoll(invite.roll);
-      setInviter(invite.inviter);
+      setRoll(parsed.roll);
+      setInviter(parsed.inviter);
     } catch (err) {
       console.error('Error loading invite details:', err);
-      setError(err.message || 'Failed to load invite details');
+      const msg =
+        err?.message || err?.details || 'Failed to load invite details';
+      if (msg.includes('not found') || msg.includes('already')) {
+        setError('This invite is invalid or has already been used.');
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -77,7 +117,8 @@ const InviteConfirmationScreen = () => {
 
   const handleAccept = async () => {
     if (!user) {
-      // Redirect to login
+      setPendingInviteToken(inviteToken);
+      setPendingInviteAcceptAfterLogin(true);
       navigation.navigate('Login');
       return;
     }
@@ -85,10 +126,11 @@ const InviteConfirmationScreen = () => {
     try {
       setProcessing(true);
       const rollId = await acceptRollInviteByToken(inviteToken);
-      
-      // Navigate to the roll detail screen
+      clearPendingInviteToken();
+      await fetchRolls();
+
       navigation.reset({
-        index: 0,
+        index: 1,
         routes: [
           { name: 'MainTabs' },
           {
@@ -108,9 +150,12 @@ const InviteConfirmationScreen = () => {
   const handleDecline = async () => {
     try {
       setProcessing(true);
-      // For link-based invites, we don't need to mark as declined
-      // Just navigate away
-      navigation.goBack();
+      try {
+        await declineRollInviteByToken(inviteToken);
+      } catch (e) {
+        console.warn('declineRollInviteByToken:', e?.message || e);
+      }
+      clearPendingInviteToken();
       if (navigation.canGoBack()) {
         navigation.goBack();
       } else {
@@ -182,10 +227,10 @@ const InviteConfirmationScreen = () => {
             <Ionicons name="mail-open" size={48} color={colors.buttonPrimary} />
           </View>
 
-          <Text style={styles.title}>You've been invited!</Text>
+          <Text style={styles.title}>Join this Roll?</Text>
           
           <Text style={styles.description}>
-            You've been invited to contribute photos to this Roll
+            You can contribute photos to this album if you accept. You can always decline.
           </Text>
 
           {/* Inviter Info */}
@@ -246,7 +291,7 @@ const InviteConfirmationScreen = () => {
               ) : (
                 <>
                   <Ionicons name="checkmark-circle" size={20} color={colors.background} />
-                  <Text style={styles.acceptButtonText}>Accept Invite</Text>
+                  <Text style={styles.acceptButtonText}>Yes, join this Roll</Text>
                 </>
               )}
             </TouchableOpacity>
@@ -256,13 +301,13 @@ const InviteConfirmationScreen = () => {
               onPress={handleDecline}
               disabled={processing}
             >
-              <Text style={styles.declineButtonText}>Decline</Text>
+              <Text style={styles.declineButtonText}>No thanks</Text>
             </TouchableOpacity>
           </View>
 
           {!user && (
             <Text style={styles.loginPrompt}>
-              You'll need to log in or sign up to accept this invitation.
+              Tap &quot;Yes&quot; to log in or sign up, then you&apos;ll complete joining this Roll.
             </Text>
           )}
         </View>

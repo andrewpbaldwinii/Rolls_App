@@ -12,6 +12,7 @@ import SignUpScreen from '../screens/SignUpScreen';
 import ForgotPasswordScreen from '../screens/ForgotPasswordScreen';
 import ResetPasswordScreen from '../screens/ResetPasswordScreen';
 import MainNavigator from './MainNavigator';
+import InviteConfirmationScreen from '../screens/InviteConfirmationScreen';
 import { useTheme } from '../contexts/ThemeContext';
 
 const Stack = createStackNavigator();
@@ -27,7 +28,16 @@ const createAuthNavStyles = (colors) =>
   });
 
 const AuthNavigator = ({ navigationRef }) => {
-  const { user, loading, passwordRecoveryActive } = useAuth();
+  const {
+    user,
+    loading,
+    passwordRecoveryActive,
+    pendingInviteToken,
+    setPendingInviteToken,
+    clearPendingInviteToken,
+    pendingInviteAcceptAfterLogin,
+    setPendingInviteAcceptAfterLogin,
+  } = useAuth();
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createAuthNavStyles(colors), [colors]);
   const navigationTheme = useMemo(
@@ -59,10 +69,14 @@ const AuthNavigator = ({ navigationRef }) => {
 
     const handleDeepLink = (url) => {
       const token = parseInviteToken(url);
-      if (!token || !user) return;
+      if (!token) return;
+      if (user) {
+        clearPendingInviteToken();
+      } else {
+        setPendingInviteToken(token);
+      }
       const nav = () =>
         navigationRef.current?.navigate('InviteConfirmation', { inviteToken: token });
-      // Ref may attach one frame after first paint
       if (navigationRef.current?.isReady?.()) {
         setTimeout(nav, 100);
       } else {
@@ -73,7 +87,31 @@ const AuthNavigator = ({ navigationRef }) => {
     Linking.getInitialURL().then((url) => url && handleDeepLink(url));
     const subscription = Linking.addEventListener('url', ({ url }) => handleDeepLink(url));
     return () => subscription.remove();
-  }, [navigationRef, user, loading]);
+  }, [navigationRef, user, loading, setPendingInviteToken, clearPendingInviteToken]);
+
+  // After login: open invite screen (preview), or with completeAfterLogin to auto-accept
+  useEffect(() => {
+    if (loading || !user || !pendingInviteToken) return;
+    const token = pendingInviteToken;
+    const acceptAfter = pendingInviteAcceptAfterLogin;
+    clearPendingInviteToken();
+    setPendingInviteAcceptAfterLogin(false);
+    const t = setTimeout(() => {
+      navigationRef.current?.navigate('InviteConfirmation', {
+        inviteToken: token,
+        ...(acceptAfter ? { completeAfterLogin: true } : {}),
+      });
+    }, 450);
+    return () => clearTimeout(t);
+  }, [
+    user,
+    loading,
+    pendingInviteToken,
+    pendingInviteAcceptAfterLogin,
+    navigationRef,
+    clearPendingInviteToken,
+    setPendingInviteAcceptAfterLogin,
+  ]);
 
   // After recovery link opens the app, session exists — stay on auth stack and show Reset Password
   useEffect(() => {
@@ -117,6 +155,7 @@ const AuthNavigator = ({ navigationRef }) => {
           <Stack.Screen name="SignUp" component={SignUpScreen} />
           <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
           <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} />
+          <Stack.Screen name="InviteConfirmation" component={InviteConfirmationScreen} />
         </Stack.Navigator>
       )}
     </NavigationContainer>

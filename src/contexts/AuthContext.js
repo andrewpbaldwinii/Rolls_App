@@ -14,6 +14,10 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
+  /** Set when opening rollsapp://roll/invite/... while logged out, or when tapping Join before login */
+  const [pendingInviteToken, setPendingInviteToken] = useState(null);
+  /** True if user tapped "Yes, join" before login — after login we auto-accept without a second tap */
+  const [pendingInviteAcceptAfterLogin, setPendingInviteAcceptAfterLogin] = useState(false);
   const [profile, setProfile] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [passwordRecoveryActive, setPasswordRecoveryActive] = useState(false);
@@ -172,12 +176,18 @@ export const AuthProvider = ({ children }) => {
     handlingRecoveryUrl.current = false;
   }, []);
 
+  const clearPendingInviteToken = useCallback(() => {
+    setPendingInviteToken(null);
+  }, []);
+
   const signOut = async () => {
     try {
       await supabase.auth.signOut();
       setUser(null);
       setSession(null);
       setProfile(null);
+      setPendingInviteToken(null);
+      setPendingInviteAcceptAfterLogin(false);
       setPasswordRecoveryActive(false);
       handlingRecoveryUrl.current = false;
     } catch (error) {
@@ -196,6 +206,11 @@ export const AuthProvider = ({ children }) => {
     refreshProfile,
     passwordRecoveryActive,
     clearPasswordRecovery,
+    pendingInviteToken,
+    setPendingInviteToken,
+    clearPendingInviteToken,
+    pendingInviteAcceptAfterLogin,
+    setPendingInviteAcceptAfterLogin,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

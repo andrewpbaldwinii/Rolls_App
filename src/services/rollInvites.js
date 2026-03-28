@@ -44,6 +44,31 @@ export const getRollInviteLink = async (rollId) => {
 };
 
 /**
+ * Invite preview for a link token (bypasses RLS for contributors). Works for anon + authenticated.
+ * @param {string} token
+ * @returns {Promise<{ invite_id: string, roll_id: string, roll: object, inviter: object }>}
+ */
+export const getRollInvitePreviewByToken = async (token) => {
+  const { data, error } = await supabase.rpc('get_roll_invite_preview_by_token', {
+    p_token: token,
+  });
+  if (error) throw error;
+  return data;
+};
+
+/**
+ * Decline a link-based invite by token.
+ * @param {string} token
+ */
+export const declineRollInviteByToken = async (token) => {
+  const { data, error } = await supabase.rpc('decline_roll_invite_by_token', {
+    p_token: token,
+  });
+  if (error) throw error;
+  return data;
+};
+
+/**
  * Invite a user by their user ID (for existing app users)
  * @param {string} rollId - Roll ID
  * @param {string} inviteeUserId - User ID to invite

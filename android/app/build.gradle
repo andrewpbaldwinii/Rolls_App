@@ -7,6 +7,18 @@ apply plugin: "com.facebook.react"
  * By default you don't need to apply any configuration, just uncomment the lines you need.
  */
 react {
+    // macOS: RN ships `hermes` in osx-bin; Gradle looks for `hermesc`. Point at whichever exists.
+    // Path is from android/app (…/Rolls_App). If both are missing, reinstall: rm -rf node_modules && npm install
+    def rnRoot = project.file("../../").canonicalFile
+    def osxHermes = new File(rnRoot, "node_modules/react-native/sdks/hermesc/osx-bin/hermes")
+    def osxHermesc = new File(rnRoot, "node_modules/react-native/sdks/hermesc/osx-bin/hermesc")
+    if (System.getProperty("os.name").toLowerCase().contains("mac")) {
+        if (osxHermes.exists()) {
+            hermesCommand.set(osxHermes.absolutePath)
+        } else if (osxHermesc.exists()) {
+            hermesCommand.set(osxHermesc.absolutePath)
+        }
+    }
     /* Folders */
     //   The root of your project, i.e. where "package.json" lives. Default is '../..'
     // root = file("../../")
