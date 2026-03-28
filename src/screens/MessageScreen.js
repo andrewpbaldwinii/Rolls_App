@@ -10,9 +10,12 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Alert,
+  PermissionsAndroid,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
+import { launchImageLibrary } from 'react-native-image-picker';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -21,6 +24,10 @@ import {
   markMessagesAsRead,
   getConversationWithUser,
 } from '../services/messaging';
+import { markAllUnreadMessageNotificationsForSender } from '../services/notifications';
+import { uploadChatAttachmentImage } from '../services/publicProfile';
+import OptimizedImage from '../components/OptimizedImage';
+import { useNotificationCounts } from '../contexts/NotificationCountsContext';
 import { useTheme } from '../contexts/ThemeContext';
 
 const MessageScreen = ({ route, navigation }) => {
@@ -29,31 +36,50 @@ const MessageScreen = ({ route, navigation }) => {
 
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const { refreshNotificationCounts } = useNotificationCounts();
   const { conversationId, otherUser, userId: otherUserId } = route.params || {};
-  
+
   const [messages, setMessages] = useState([]);
   const [messageText, setMessageText] = useState('');
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [conversation, setConversation] = useState(null);
+  const [pendingAttachment, setPendingAttachment] = useState(null);
   const flatListRef = useRef(null);
 
+  const effectiveConversationId = conversationId || conversation?.id;
+
   const loadMessages = useCallback(async () => {
-    if (!conversationId || !user?.id) return;
+    if (!effectiveConversationId || !user?.id) return;
 
     try {
       setLoading(true);
-      const data = await getMessages(conversationId);
+      const data = await getMessages(effectiveConversationId);
       setMessages(data);
-      
-      // Mark messages as read
-      await markMessagesAsRead(conversationId, user.id);
+
+      await markMessagesAsRead(effectiveConversationId, user.id);
+
+      const senderId = otherUser?.id || otherUserId;
+      if (senderId) {
+        try {
+          await markAllUnreadMessageNotificationsForSender(user.id, senderId);
+        } catch (e) {
+          console.warn('Error marking message notifications read:', e);
+        }
+      }
+      await refreshNotificationCounts();
     } catch (error) {
       console.error('Error loading messages:', error);
     } finally {
       setLoading(false);
     }
-  }, [conversationId, user?.id]);
+  }, [
+    effectiveConversationId,
+    user?.id,
+    otherUser?.id,
+    otherUserId,
+    refreshNotificationCounts,
+  ]);
 
   // If we have otherUserId but no conversationId, create/get conversation
   useEffect(() => {
@@ -75,14 +101,77 @@ const MessageScreen = ({ route, navigation }) => {
 
   useFocusEffect(
     useCallback(() => {
-      if (conversationId) {
+      if (effectiveConversationId) {
         loadMessages();
       }
-    }, [loadMessages, conversationId])
+    }, [loadMessages, effectiveConversationId])
   );
 
+  const requestPhotoPermission = async () => {
+    if (Platform.OS !== 'android') return true;
+    try {
+      if (Platform.Version >= 33) {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
+          {
+            title: 'Photo access',
+            message: 'Rolls needs access to your photos to attach images in chat.',
+            buttonPositive: 'OK',
+          }
+        );
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      }
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
+        {
+          title: 'Storage access',
+          message: 'Rolls needs access to your storage to attach images.',
+          buttonPositive: 'OK',
+        }
+      );
+      return granted === PermissionsAndroid.RESULTS.GRANTED;
+    } catch (e) {
+      console.warn('Permission error:', e);
+      return false;
+    }
+  };
+
+  const handleAttachPress = async () => {
+    if (sending) return;
+    if (Platform.OS === 'android') {
+      const ok = await requestPhotoPermission();
+      if (!ok) {
+        Alert.alert(
+          'Permission required',
+          'Allow photo access in Settings to attach images.'
+        );
+        return;
+      }
+    }
+    launchImageLibrary(
+      {
+        mediaType: 'photo',
+        quality: 0.85,
+        maxWidth: 2048,
+        maxHeight: 2048,
+        selectionLimit: 1,
+        includeBase64: true,
+      },
+      (response) => {
+        if (response.didCancel || response.errorCode) return;
+        const asset = response.assets?.[0];
+        if (!asset?.uri) return;
+        setPendingAttachment({
+          uri: asset.uri,
+          base64: asset.base64,
+        });
+      }
+    );
+  };
+
   const handleSend = async () => {
-    if (!messageText.trim() || sending || !user?.id) return;
+    const trimmed = messageText.trim();
+    if ((!trimmed && !pendingAttachment) || sending || !user?.id) return;
 
     const currentConversationId = conversationId || conversation?.id;
     const recipientId = otherUser?.id || otherUserId;
@@ -94,31 +183,47 @@ const MessageScreen = ({ route, navigation }) => {
 
     try {
       setSending(true);
+      let imageUrl = null;
+      if (pendingAttachment) {
+        imageUrl = await uploadChatAttachmentImage(
+          user.id,
+          pendingAttachment.uri,
+          pendingAttachment.base64
+        );
+      }
+
       const newMessage = await sendMessage(
         currentConversationId,
         user.id,
         recipientId,
-        messageText.trim()
+        trimmed,
+        imageUrl
       );
 
-      // Add message to local state
-      setMessages(prev => [...prev, {
-        ...newMessage,
-        sender: {
-          id: user.id,
-          username: user.user_metadata?.username,
-          display_name: user.user_metadata?.display_name,
+      setMessages(prev => [
+        ...prev,
+        {
+          ...newMessage,
+          sender: {
+            id: user.id,
+            username: user.user_metadata?.username,
+            display_name: user.user_metadata?.display_name,
+          },
         },
-      }]);
+      ]);
 
       setMessageText('');
-      
-      // Scroll to bottom
+      setPendingAttachment(null);
+
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 100);
     } catch (error) {
       console.error('Error sending message:', error);
+      Alert.alert(
+        'Could not send',
+        error?.message || 'Something went wrong. Try again.'
+      );
     } finally {
       setSending(false);
     }
@@ -156,14 +261,24 @@ const MessageScreen = ({ route, navigation }) => {
             isOwn ? styles.messageBubbleOwn : styles.messageBubbleOther,
           ]}
         >
-          <Text
-            style={[
-              styles.messageText,
-              isOwn ? styles.messageTextOwn : styles.messageTextOther,
-            ]}
-          >
-            {item.message_text}
-          </Text>
+          {item.image_url ? (
+            <OptimizedImage
+              source={{ uri: item.image_url }}
+              style={styles.messageImage}
+              resizeMode="cover"
+            />
+          ) : null}
+          {!!(item.message_text && item.message_text.trim()) ? (
+            <Text
+              style={[
+                styles.messageText,
+                isOwn ? styles.messageTextOwn : styles.messageTextOther,
+                item.image_url && styles.messageTextBelowImage,
+              ]}
+            >
+              {item.message_text}
+            </Text>
+          ) : null}
           <Text
             style={[
               styles.messageTime,
@@ -225,10 +340,34 @@ const MessageScreen = ({ route, navigation }) => {
             }}
           />
 
+          {pendingAttachment ? (
+            <View style={styles.attachmentPreviewRow}>
+              <Image
+                source={{ uri: pendingAttachment.uri }}
+                style={styles.attachmentThumb}
+              />
+              <TouchableOpacity
+                style={styles.attachmentRemove}
+                onPress={() => setPendingAttachment(null)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close-circle" size={22} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
           <View style={styles.inputContainer}>
+            <TouchableOpacity
+              style={[styles.attachButton, sending && styles.sendButtonDisabled]}
+              onPress={handleAttachPress}
+              disabled={sending}
+              accessibilityLabel="Attach image"
+            >
+              <Ionicons name="attach-outline" size={24} color={colors.primary} />
+            </TouchableOpacity>
             <TextInput
               style={styles.input}
-              placeholder="Type a message..."
+              placeholder="Message..."
               placeholderTextColor={colors.textSecondary}
               value={messageText}
               onChangeText={setMessageText}
@@ -238,10 +377,12 @@ const MessageScreen = ({ route, navigation }) => {
             <TouchableOpacity
               style={[
                 styles.sendButton,
-                (!messageText.trim() || sending) && styles.sendButtonDisabled,
+                (!messageText.trim() && !pendingAttachment) || sending
+                  ? styles.sendButtonDisabled
+                  : null,
               ]}
               onPress={handleSend}
-              disabled={!messageText.trim() || sending}
+              disabled={(!messageText.trim() && !pendingAttachment) || sending}
             >
               {sending ? (
                 <ActivityIndicator size="small" color={colors.buttonText} />
@@ -346,6 +487,15 @@ const createStyles = (colors) => StyleSheet.create({
   messageTextOther: {
     color: colors.textPrimary,
   },
+  messageTextBelowImage: {
+    marginTop: 8,
+  },
+  messageImage: {
+    width: 220,
+    height: 220,
+    borderRadius: 12,
+    maxWidth: '100%',
+  },
   messageTime: {
     fontSize: 11,
     marginTop: 4,
@@ -356,14 +506,41 @@ const createStyles = (colors) => StyleSheet.create({
   messageTimeOther: {
     color: colors.textSecondary,
   },
+  attachmentPreviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 4,
+    backgroundColor: colors.background,
+    borderTopWidth: 1,
+    borderTopColor: colors.inputBorder,
+  },
+  attachmentThumb: {
+    width: 56,
+    height: 56,
+    borderRadius: 8,
+  },
+  attachmentRemove: {
+    marginLeft: 8,
+  },
   inputContainer: {
     flexDirection: 'row',
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     paddingVertical: 12,
     borderTopWidth: 1,
     borderTopColor: colors.inputBorder,
     backgroundColor: colors.background,
     alignItems: 'flex-end',
+  },
+  attachButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 4,
+    marginBottom: 2,
   },
   input: {
     flex: 1,

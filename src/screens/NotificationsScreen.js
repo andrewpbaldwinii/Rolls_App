@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,10 +13,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../contexts/AuthContext';
-import { getNotifications, getUnreadNotificationCount } from '../services/notifications';
-import { getUnreadMessageCount } from '../services/messaging';
+import {
+  getNotifications,
+  groupNotificationsForDisplay,
+  markNotificationAsRead,
+  markNotificationsAsReadByIds,
+  markAllNotificationsAsRead,
+} from '../services/notifications';
 import { acceptRollInvite, getPendingInvites } from '../services/rollInvites';
 import { useRolls } from '../contexts/RollsContext';
+import { useNotificationCounts } from '../contexts/NotificationCountsContext';
 import { useTheme } from '../contexts/ThemeContext';
 
 const NotificationsScreen = ({ navigation }) => {
@@ -26,11 +32,14 @@ const NotificationsScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { fetchRolls } = useRolls();
+  const {
+    showInboxMessageIndicator,
+    dismissInboxMessageIndicator,
+    refreshNotificationCounts,
+  } = useNotificationCounts();
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
   const [acceptingInviteId, setAcceptingInviteId] = useState(null);
   const [pendingInvites, setPendingInvites] = useState([]);
 
@@ -39,27 +48,16 @@ const NotificationsScreen = ({ navigation }) => {
 
     try {
       setLoading(true);
+      await markAllNotificationsAsRead(user.id);
+      await refreshNotificationCounts();
       const data = await getNotifications(user.id);
       setNotifications(data);
-      
-      const count = await getUnreadNotificationCount(user.id);
-      setUnreadCount(count);
-      
-      const messageCount = await getUnreadMessageCount(user.id);
-      setUnreadMessageCount(messageCount);
-      
-      // Load pending invites to show accept/decline buttons
-      // Only load if there are roll_invite notifications to avoid unnecessary calls
-      const hasRollInvites = data.some(n => n.type === 'roll_invite');
-      if (hasRollInvites) {
-        try {
-          const invites = await getPendingInvites();
-          setPendingInvites(invites || []);
-        } catch (err) {
-          console.warn('Error loading pending invites:', err);
-          setPendingInvites([]);
-        }
-      } else {
+
+      try {
+        const invites = await getPendingInvites();
+        setPendingInvites(invites || []);
+      } catch (err) {
+        console.warn('Error loading pending invites:', err);
         setPendingInvites([]);
       }
     } catch (error) {
@@ -68,7 +66,12 @@ const NotificationsScreen = ({ navigation }) => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user?.id]);
+  }, [user?.id, refreshNotificationCounts]);
+
+  const displayRows = useMemo(
+    () => groupNotificationsForDisplay(notifications),
+    [notifications]
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -82,6 +85,7 @@ const NotificationsScreen = ({ navigation }) => {
   }, [loadNotifications]);
 
   const handleInboxPress = () => {
+    dismissInboxMessageIndicator();
     navigation.navigate('Inbox');
   };
 
@@ -99,7 +103,13 @@ const NotificationsScreen = ({ navigation }) => {
     try {
       console.log('📥 Accepting roll invite:', invite.id);
       await acceptRollInvite(invite.id);
-      
+
+      try {
+        await markNotificationAsRead(notification.id);
+      } catch (e) {
+        console.warn('Could not mark invite notification read:', e);
+      }
+
       // Refresh everything
       await fetchRolls();
       await loadNotifications();
@@ -136,12 +146,17 @@ const NotificationsScreen = ({ navigation }) => {
     }
   };
 
-  const renderNotification = ({ item }) => {
-    const isUnread = !item.read_at;
-    const isRollInvite = item.type === 'roll_invite';
-    const pendingInvite = isRollInvite ? pendingInvites.find(inv => inv.roll_id === item.related_roll_id) : null;
-    const isAccepting = acceptingInviteId === pendingInvite?.id;
-    
+  const renderMessageGroup = (item) => {
+    const name =
+      item.related_user?.display_name ||
+      item.related_user?.username ||
+      'Someone';
+    const isUnread = item.unreadCount > 0;
+    const subtitle =
+      item.count === 1
+        ? item.previewBody || 'New message'
+        : `${item.count} new messages`;
+
     return (
       <View
         style={[
@@ -152,14 +167,68 @@ const NotificationsScreen = ({ navigation }) => {
         <TouchableOpacity
           style={styles.notificationContentWrapper}
           activeOpacity={0.7}
-          onPress={() => {
-            // Handle notification tap based on type
+          onPress={async () => {
+            if (!user?.id) return;
+            try {
+              if (item.notificationIds?.length) {
+                await markNotificationsAsReadByIds(user.id, item.notificationIds);
+              }
+              await refreshNotificationCounts();
+            } catch (e) {
+              console.warn('Mark message notifications read:', e);
+            }
+            navigation.navigate('Message', { userId: item.relatedUserId });
+          }}
+        >
+          <View style={styles.notificationIcon}>
+            <Ionicons name="mail" size={24} color={colors.primary} />
+          </View>
+          <View style={styles.notificationContent}>
+            <Text style={styles.notificationTitle}>{name}</Text>
+            <Text style={styles.notificationBody} numberOfLines={2}>
+              {subtitle}
+            </Text>
+            <Text style={styles.notificationTime}>
+              {formatTimestamp(item.latestAt)}
+            </Text>
+          </View>
+          {isUnread && <View style={styles.unreadDot} />}
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  const renderSingleNotification = (item) => {
+    const isUnread = !item.read_at;
+    const isRollInvite = item.type === 'roll_invite';
+    const pendingInvite = isRollInvite
+      ? pendingInvites.find((inv) => inv.roll_id === item.related_roll_id)
+      : null;
+    const isAccepting = acceptingInviteId === pendingInvite?.id;
+
+    return (
+      <View
+        style={[
+          styles.notificationItem,
+          isUnread && styles.notificationItemUnread,
+        ]}
+      >
+        <TouchableOpacity
+          style={styles.notificationContentWrapper}
+          activeOpacity={0.7}
+          onPress={async () => {
+            if (!user?.id) return;
+            try {
+              if (!item.read_at) {
+                await markNotificationAsRead(item.id);
+              }
+              await refreshNotificationCounts();
+            } catch (e) {
+              console.warn('Mark notification read:', e);
+            }
             if (item.type === 'message' && item.related_user_id) {
-              navigation.navigate('Message', {
-                userId: item.related_user_id,
-              });
+              navigation.navigate('Message', { userId: item.related_user_id });
             } else if (item.type === 'roll_invite' && item.related_roll_id) {
-              // Navigate to roll detail screen
               navigation.navigate('RollDetail', {
                 rollId: item.related_roll_id,
               });
@@ -196,12 +265,14 @@ const NotificationsScreen = ({ navigation }) => {
           </View>
           {isUnread && <View style={styles.unreadDot} />}
         </TouchableOpacity>
-        
-        {/* Accept/Decline buttons for roll invites */}
+
         {isRollInvite && pendingInvite && (
           <View style={styles.inviteActions}>
             <TouchableOpacity
-              style={[styles.acceptButton, isAccepting && styles.acceptButtonDisabled]}
+              style={[
+                styles.acceptButton,
+                isAccepting && styles.acceptButtonDisabled,
+              ]}
               onPress={() => handleAcceptInvite(item)}
               disabled={isAccepting}
             >
@@ -209,27 +280,51 @@ const NotificationsScreen = ({ navigation }) => {
                 <ActivityIndicator size="small" color={colors.buttonText} />
               ) : (
                 <>
-                  <Ionicons name="checkmark-circle" size={16} color={colors.buttonText} />
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={16}
+                    color={colors.buttonText}
+                  />
                   <Text style={styles.acceptButtonText}>Accept</Text>
                 </>
               )}
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.declineButton}
-              onPress={() => {
-                // Navigate to roll detail where they can decline
+              onPress={async () => {
+                if (user?.id) {
+                  try {
+                    if (!item.read_at) {
+                      await markNotificationAsRead(item.id);
+                    }
+                    await refreshNotificationCounts();
+                  } catch (e) {
+                    console.warn('Mark invite notification read:', e);
+                  }
+                }
                 navigation.navigate('RollDetail', {
                   rollId: item.related_roll_id,
                 });
               }}
             >
-              <Ionicons name="close-circle" size={16} color={colors.textSecondary} />
+              <Ionicons
+                name="close-circle"
+                size={16}
+                color={colors.textSecondary}
+              />
               <Text style={styles.declineButtonText}>Decline</Text>
             </TouchableOpacity>
           </View>
         )}
       </View>
     );
+  };
+
+  const renderRow = ({ item }) => {
+    if (item.kind === 'message_group') {
+      return renderMessageGroup(item);
+    }
+    return renderSingleNotification(item.notification);
   };
 
   return (
@@ -242,11 +337,9 @@ const NotificationsScreen = ({ navigation }) => {
           activeOpacity={0.7}
         >
           <Ionicons name="mail" size={24} color={colors.textWhite} />
-          {unreadMessageCount > 0 && (
+          {showInboxMessageIndicator && (
             <View style={styles.inboxBadge}>
-              <Text style={styles.inboxBadgeText}>
-                {unreadMessageCount > 99 ? '99+' : unreadMessageCount}
-              </Text>
+              <Text style={styles.inboxBadgeText}>!</Text>
             </View>
           )}
         </TouchableOpacity>
@@ -256,7 +349,7 @@ const NotificationsScreen = ({ navigation }) => {
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
-      ) : notifications.length === 0 ? (
+      ) : displayRows.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Ionicons name="notifications-outline" size={64} color={colors.textSecondary} />
           <Text style={styles.emptyTitle}>No notifications</Text>
@@ -266,9 +359,13 @@ const NotificationsScreen = ({ navigation }) => {
         </View>
       ) : (
         <FlatList
-          data={notifications}
-          renderItem={renderNotification}
-          keyExtractor={(item) => item.id}
+          data={displayRows}
+          renderItem={renderRow}
+          keyExtractor={(item) =>
+            item.kind === 'message_group'
+              ? `msg-group-${item.relatedUserId}`
+              : item.notification.id
+          }
           contentContainerStyle={styles.listContent}
           refreshControl={
             <RefreshControl
@@ -312,17 +409,18 @@ const createStyles = (colors) => StyleSheet.create({
     top: 4,
     right: 4,
     backgroundColor: colors.error,
-    borderRadius: 10,
-    minWidth: 18,
-    height: 18,
-    paddingHorizontal: 4,
+    borderRadius: 9,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 3,
     justifyContent: 'center',
     alignItems: 'center',
   },
   inboxBadgeText: {
     color: colors.textWhite,
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: 'bold',
+    lineHeight: 13,
   },
   loadingContainer: {
     flex: 1,

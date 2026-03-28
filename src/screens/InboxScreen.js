@@ -13,7 +13,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../contexts/AuthContext';
-import { getConversations, getUnreadMessageCount } from '../services/messaging';
+import { useNotificationCounts } from '../contexts/NotificationCountsContext';
+import { getConversations } from '../services/messaging';
 import { useTheme } from '../contexts/ThemeContext';
 
 const InboxScreen = ({ navigation }) => {
@@ -22,10 +23,10 @@ const InboxScreen = ({ navigation }) => {
 
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const { dismissInboxMessageIndicator } = useNotificationCounts();
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
 
   const loadConversations = useCallback(async () => {
     if (!user?.id) return;
@@ -34,9 +35,6 @@ const InboxScreen = ({ navigation }) => {
       setLoading(true);
       const data = await getConversations(user.id);
       setConversations(data);
-      
-      const count = await getUnreadMessageCount(user.id);
-      setUnreadCount(count);
     } catch (error) {
       console.error('Error loading conversations:', error);
     } finally {
@@ -47,8 +45,9 @@ const InboxScreen = ({ navigation }) => {
 
   useFocusEffect(
     useCallback(() => {
+      dismissInboxMessageIndicator();
       loadConversations();
-    }, [loadConversations])
+    }, [loadConversations, dismissInboxMessageIndicator])
   );
 
   const handleRefresh = useCallback(() => {
@@ -152,11 +151,6 @@ const InboxScreen = ({ navigation }) => {
           <Ionicons name="arrow-back" size={24} color={colors.textWhite} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Inbox</Text>
-        {unreadCount > 0 && (
-          <View style={styles.unreadBadge}>
-            <Text style={styles.unreadBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
-          </View>
-        )}
         <View style={styles.headerRight} />
       </View>
 
@@ -213,21 +207,6 @@ const createStyles = (colors) => StyleSheet.create({
   },
   headerRight: {
     width: 32,
-  },
-  unreadBadge: {
-    backgroundColor: colors.error,
-    borderRadius: 10,
-    minWidth: 20,
-    height: 20,
-    paddingHorizontal: 6,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginLeft: 8,
-  },
-  unreadBadgeText: {
-    color: colors.textWhite,
-    fontSize: 12,
-    fontWeight: 'bold',
   },
   loadingContainer: {
     flex: 1,

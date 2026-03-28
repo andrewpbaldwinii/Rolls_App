@@ -80,6 +80,109 @@ export const getUnreadNotificationCount = async (userId) => {
 };
 
 /**
+ * Mark every unread "message" notification from a given sender (e.g. after opening the thread).
+ */
+export const markAllUnreadMessageNotificationsForSender = async (
+  userId,
+  senderUserId
+) => {
+  if (!userId || !senderUserId) return;
+  try {
+    const { error } = await supabase
+      .from('notifications')
+      .update({ read_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .eq('type', 'message')
+      .eq('related_user_id', senderUserId)
+      .is('read_at', null);
+
+    if (error) throw error;
+  } catch (error) {
+    console.error('Error marking message notifications read:', error);
+    throw error;
+  }
+};
+
+/**
+ * Group message notifications by sender for the notifications list (newest activity first).
+ */
+export const groupNotificationsForDisplay = (notifications) => {
+  if (!notifications?.length) return [];
+
+  const messageByUser = new Map();
+  const singles = [];
+
+  for (const n of notifications) {
+    if (n.type === 'message' && n.related_user_id) {
+      const uid = n.related_user_id;
+      if (!messageByUser.has(uid)) messageByUser.set(uid, []);
+      messageByUser.get(uid).push(n);
+    } else {
+      singles.push({
+        kind: 'single',
+        notification: n,
+        sortKey: new Date(n.created_at).getTime(),
+      });
+    }
+  }
+
+  const groups = [];
+  for (const [, msgs] of messageByUser) {
+    msgs.sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    const unreadCount = msgs.filter((m) => !m.read_at).length;
+    // Hide message rows once everything for this sender has been read (e.g. after opening chat).
+    if (unreadCount === 0) {
+      continue;
+    }
+    const latest = msgs[0];
+    groups.push({
+      kind: 'message_group',
+      relatedUserId: latest.related_user_id,
+      count: msgs.length,
+      unreadCount,
+      latestAt: latest.created_at,
+      notificationIds: msgs.map((m) => m.id),
+      related_user: latest.related_user,
+      previewBody: latest.body,
+      sortKey: new Date(latest.created_at).getTime(),
+    });
+  }
+
+  const singlesFiltered = singles.filter((s) => {
+    const n = s.notification;
+    if (n.type === 'message' && n.read_at) {
+      return false;
+    }
+    return true;
+  });
+
+  const merged = [...groups, ...singlesFiltered];
+  merged.sort((a, b) => b.sortKey - a.sortKey);
+  return merged;
+};
+
+/**
+ * Mark multiple notifications read (e.g. grouped message rows).
+ */
+export const markNotificationsAsReadByIds = async (userId, notificationIds) => {
+  if (!userId || !notificationIds?.length) return;
+  try {
+    const { error } = await supabase
+      .from('notifications')
+      .update({ read_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .in('id', notificationIds);
+
+    if (error) throw error;
+  } catch (error) {
+    console.error('Error marking notifications read:', error);
+    throw error;
+  }
+};
+
+/**
  * Mark notification as read
  */
 export const markNotificationAsRead = async (notificationId) => {

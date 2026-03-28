@@ -1062,9 +1062,6 @@ const PublicProfileScreen = ({ route, navigation }) => {
           {(profile.email || (isOwnProfile && currentUser?.email)) && (
             <Text style={styles.email}>{profile.email || currentUser?.email}</Text>
           )}
-          {profile.id && (
-            <Text style={styles.userId}>ID: {profile.id}</Text>
-          )}
           {profile.bio && (
             <Text style={styles.bio}>{profile.bio}</Text>
           )}
@@ -1395,12 +1392,6 @@ const createStyles = (colors) => StyleSheet.create({
     fontSize: 12,
     color: colors.textSecondary,
     marginBottom: 4,
-  },
-  userId: {
-    fontSize: 11,
-    color: colors.textSecondary,
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    marginBottom: 8,
   },
   bio: {
     fontSize: 14,

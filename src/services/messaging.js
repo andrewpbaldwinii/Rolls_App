@@ -92,7 +92,7 @@ export const getMessages = async (conversationId, limit = 50, offset = 0) => {
   try {
     const { data: messages, error } = await supabase
       .from('messages')
-      .select('id, sender_id, recipient_id, message_text, read_at, created_at')
+      .select('id, sender_id, recipient_id, message_text, image_url, read_at, created_at')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
@@ -143,17 +143,29 @@ export const getMessages = async (conversationId, limit = 50, offset = 0) => {
 };
 
 /**
- * Send a message
+ * Send a message (text and/or image URL)
  */
-export const sendMessage = async (conversationId, senderId, recipientId, messageText) => {
+export const sendMessage = async (
+  conversationId,
+  senderId,
+  recipientId,
+  messageText,
+  imageUrl = null
+) => {
   try {
+    const text = (messageText || '').trim();
+    if (!text && !imageUrl) {
+      throw new Error('Message cannot be empty');
+    }
+
     const { data, error } = await supabase
       .from('messages')
       .insert({
         conversation_id: conversationId,
         sender_id: senderId,
         recipient_id: recipientId,
-        message_text: messageText,
+        message_text: text,
+        image_url: imageUrl || null,
       })
       .select()
       .single();

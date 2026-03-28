@@ -1,5 +1,26 @@
 import { supabase } from '../lib/supabase';
 
+let hasLoggedRollInvitesTableMissing = false;
+
+/** True only for "relation/table does not exist" — not embed/RLS/FK errors (those also mention "roll_invites"). */
+function isRollInvitesTableMissingError(error) {
+  if (!error) return false;
+  const msg = (error.message || '').toLowerCase();
+  const code = String(error.code || '');
+  if (code === 'PGRST205' || code === 'PGRST116') return true;
+  if (msg.includes('does not exist') && (msg.includes('relation') || msg.includes('table'))) return true;
+  if (msg.includes('could not find the table')) return true;
+  return false;
+}
+
+function warnRollInvitesTableMissingOnce() {
+  if (hasLoggedRollInvitesTableMissing) return;
+  hasLoggedRollInvitesTableMissing = true;
+  console.warn(
+    'roll_invites table does not exist. Run CREATE_ROLL_INVITES_TABLE.sql in Supabase SQL Editor.'
+  );
+}
+
 /**
  * Generate or get invite link token for a roll
  * @param {string} rollId - Roll ID
@@ -85,7 +106,7 @@ export const inviteUserToRoll = async (rollId, inviteeUserId) => {
       .select('id')
       .limit(0);
 
-    if (tableCheckError && (tableCheckError.code === 'PGRST205' || tableCheckError.message?.includes('roll_invites'))) {
+    if (tableCheckError && isRollInvitesTableMissingError(tableCheckError)) {
       throw new Error(
         'Roll invites feature is not set up yet. Please run CREATE_ROLL_INVITES_TABLE.sql in Supabase SQL Editor to enable this feature.'
       );
@@ -170,7 +191,7 @@ export const inviteEmailToRoll = async (rollId, email) => {
       .single();
 
     if (error) {
-      if (error.code === 'PGRST205' || error.message?.includes('roll_invites')) {
+      if (isRollInvitesTableMissingError(error)) {
         throw new Error(
           'Roll invites feature is not set up yet. Please run CREATE_ROLL_INVITES_TABLE.sql in Supabase SQL Editor.'
         );
@@ -259,6 +280,31 @@ export const declineRollInvite = async (inviteId) => {
 };
 
 /**
+ * Load public.users for inviter_id (PostgREST cannot embed: FKs reference auth.users, not public.users).
+ */
+async function attachInviterProfiles(invites) {
+  if (!invites?.length) return invites || [];
+  const ids = [...new Set(invites.map((r) => r.inviter_id).filter(Boolean))];
+  if (ids.length === 0) return invites;
+
+  const { data: profiles, error } = await supabase
+    .from('users')
+    .select('id, username, display_name, avatar_url')
+    .in('id', ids);
+
+  if (error) {
+    console.warn('Could not load inviter profiles:', error.message);
+    return invites;
+  }
+
+  const map = new Map((profiles || []).map((u) => [u.id, u]));
+  return invites.map((row) => ({
+    ...row,
+    inviter: map.get(row.inviter_id) || null,
+  }));
+}
+
+/**
  * Get pending invites for current user
  * @returns {Promise<Array>} Array of pending invites
  */
@@ -269,34 +315,58 @@ export const getPendingInvites = async () => {
 
     const { data, error } = await supabase
       .from('roll_invites')
-      .select(`
+      .select(
+        `
         *,
-        roll:rolls(*),
-        inviter:users!roll_invites_inviter_id_fkey(id, username, display_name, avatar_url)
-      `)
+        roll:rolls(*)
+      `
+      )
       .eq('status', 'pending')
       .or(`invitee_user_id.eq.${user.id},invitee_email.eq.${user.email || ''}`)
       .order('created_at', { ascending: false })
-      .limit(50); // Add limit to prevent large queries
+      .limit(50);
 
     if (error) {
-      // Handle missing table gracefully
-      if (error.code === 'PGRST205' || error.code === 'PGRST116' || error.message?.includes('roll_invites') || error.message?.includes('does not exist')) {
-        console.warn(
-          'roll_invites table does not exist. Please run CREATE_ROLL_INVITES_TABLE.sql in Supabase SQL Editor.'
-        );
+      if (isRollInvitesTableMissingError(error)) {
+        warnRollInvitesTableMissingOnce();
         return [];
       }
-      // Log but don't throw - return empty array to prevent breaking the app
-      console.error('Error getting pending invites:', error);
+      console.error(
+        'Error getting pending invites:',
+        error.code,
+        error.message,
+        error.details || ''
+      );
       return [];
     }
-    return data || [];
+    return attachInviterProfiles(data || []);
   } catch (error) {
     console.error('Error getting pending invites (exception):', error);
-    return []; // Always return empty array on error to prevent breaking
+    return [];
   }
 };
+
+async function attachInviteeProfiles(invites) {
+  if (!invites?.length) return invites || [];
+  const ids = [...new Set(invites.map((r) => r.invitee_user_id).filter(Boolean))];
+  if (ids.length === 0) return invites;
+
+  const { data: profiles, error } = await supabase
+    .from('users')
+    .select('id, username, display_name, avatar_url')
+    .in('id', ids);
+
+  if (error) {
+    console.warn('Could not load invitee profiles:', error.message);
+    return invites;
+  }
+
+  const map = new Map((profiles || []).map((u) => [u.id, u]));
+  return invites.map((row) => ({
+    ...row,
+    invitee: map.get(row.invitee_user_id) || null,
+  }));
+}
 
 /**
  * Get invites for a specific roll (roll owner only)
@@ -307,24 +377,24 @@ export const getRollInvites = async (rollId) => {
   try {
     const { data, error } = await supabase
       .from('roll_invites')
-      .select(`
-        *,
-        invitee:users!roll_invites_invitee_user_id_fkey(id, username, display_name, avatar_url)
-      `)
+      .select('*')
       .eq('roll_id', rollId)
       .order('created_at', { ascending: false });
 
     if (error) {
-      // Handle missing table gracefully
-      if (error.code === 'PGRST205' || error.message?.includes('roll_invites')) {
-        console.warn(
-          'roll_invites table does not exist. Please run CREATE_ROLL_INVITES_TABLE.sql in Supabase SQL Editor.'
-        );
+      if (isRollInvitesTableMissingError(error)) {
+        warnRollInvitesTableMissingOnce();
         return [];
       }
+      console.error(
+        'Error getting roll invites:',
+        error.code,
+        error.message,
+        error.details || ''
+      );
       throw error;
     }
-    return data || [];
+    return attachInviteeProfiles(data || []);
   } catch (error) {
     console.error('Error getting roll invites:', error);
     return [];

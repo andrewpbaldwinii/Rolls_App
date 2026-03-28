@@ -18,7 +18,7 @@ import InviteContributorsScreen from '../screens/InviteContributorsScreen';
 import InviteConfirmationScreen from '../screens/InviteConfirmationScreen';
 import AllRollsScreen from '../screens/AllRollsScreen';
 import CameraButton from '../components/CameraButton';
-import NotificationBadge from '../components/NotificationBadge';
+import { useNotificationCounts } from '../contexts/NotificationCountsContext';
 import { useTheme } from '../contexts/ThemeContext';
 import appIcon from '../assets/images/app_icon.png';
 
@@ -71,9 +71,15 @@ const createTabStyles = (colors) =>
 
 const TabNavigator = () => {
   const { colors } = useTheme();
+  const { unreadNotificationCount } = useNotificationCounts();
   const styles = useMemo(() => createTabStyles(colors), [colors]);
-  // TODO: Replace with actual notification count from context/state
-  const notificationCount = 0; // Placeholder
+
+  const notificationTabBadge =
+    unreadNotificationCount > 0
+      ? unreadNotificationCount > 99
+        ? '99+'
+        : unreadNotificationCount
+      : undefined;
 
   return (
     <Tab.Navigator
@@ -107,6 +113,7 @@ const TabNavigator = () => {
         component={NotificationsScreen}
         options={{
           tabBarLabel: 'Notifications',
+          tabBarBadge: notificationTabBadge,
           tabBarIcon: ({ focused, color, size }) => (
             <View style={styles.iconContainer}>
               <Ionicons 
@@ -114,7 +121,6 @@ const TabNavigator = () => {
                 size={size || 24} 
                 color={color || (focused ? colors.navActive : colors.navInactive)} 
               />
-              {notificationCount > 0 && <NotificationBadge count={notificationCount} />}
             </View>
           ),
         }}

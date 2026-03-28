@@ -493,9 +493,15 @@ export const getUserPhotos = async (userId) => {
  * @param {string} userId - User ID
  * @param {string} imagePath - Local file path or URI
  * @param {string} base64Data - Optional base64 data (preferred for Android content:// URIs)
+ * @param {string} [fileNamePrefix='profile'] - File name prefix (e.g. 'chat' for message attachments)
  * @returns {Promise<string>} Public URL of uploaded image
  */
-export const uploadProfileImage = async (userId, imagePath, base64Data = null) => {
+export const uploadProfileImage = async (
+  userId,
+  imagePath,
+  base64Data = null,
+  fileNamePrefix = 'profile'
+) => {
   try {
     // Validate userId
     if (!userId) {
@@ -510,7 +516,7 @@ export const uploadProfileImage = async (userId, imagePath, base64Data = null) =
 
     // Create a unique filename
     const timestamp = Date.now();
-    const fileName = `profile_${timestamp}.jpg`;
+    const fileName = `${fileNamePrefix}_${timestamp}.jpg`;
     // Use simpler path format: {userId}/filename.jpg (in profile-images bucket)
     const storagePath = `${userId}/${fileName}`;
 
@@ -663,6 +669,12 @@ export const uploadProfileImage = async (userId, imagePath, base64Data = null) =
     throw error;
   }
 };
+
+/**
+ * Upload a chat attachment to the same storage as profile images (profile-images bucket, user-scoped path).
+ */
+export const uploadChatAttachmentImage = async (userId, imagePath, base64Data = null) =>
+  uploadProfileImage(userId, imagePath, base64Data, 'chat');
 
 /**
  * Make a roll public
