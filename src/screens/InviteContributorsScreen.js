@@ -21,6 +21,8 @@ import {
   getRollInviteLink,
   inviteUserToRoll,
   inviteEmailToRoll,
+  buildAndroidIntentInviteUrl,
+  parseTokenFromRollsappInviteLink,
 } from '../services/rollInvites';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../contexts/ThemeContext';
@@ -239,10 +241,35 @@ const InviteContributorsScreen = () => {
       return;
     }
     try {
-      await Share.share({
-        message: `You're invited to contribute to "${rollName || 'a Roll'}" on Rolls.\n\nOpen in the Rolls app:\n${inviteLink}`,
-        title: 'Roll invite',
-      });
+      const title = 'Roll invite';
+      const token = parseTokenFromRollsappInviteLink(inviteLink);
+      const intentUrl =
+        token && Platform.OS === 'android' ? buildAndroidIntentInviteUrl(token) : null;
+
+      const lines = [
+        `You're invited to contribute to "${rollName || 'a Roll'}" on Rolls.`,
+        '',
+        'Tap a link below to open the invite in the Rolls app:',
+        '',
+        inviteLink,
+      ];
+      if (intentUrl) {
+        lines.push('', 'If the link above does not open the app, tap:', intentUrl);
+      }
+      const body = lines.join('\n');
+
+      if (Platform.OS === 'ios') {
+        await Share.share({
+          title,
+          message: body,
+          url: inviteLink,
+        });
+      } else {
+        await Share.share({
+          title,
+          message: body,
+        });
+      }
     } catch (e) {
       console.warn('Share cancelled or failed', e);
     }
@@ -368,7 +395,7 @@ const InviteContributorsScreen = () => {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         <View style={styles.warnCard}>
           <Text style={styles.warnText}>
-            Invited people open the link or scan the QR in the Rolls app, then accept the invite to contribute.
+            Share the invite link by text or email — it opens Rolls directly (same deep link as the QR code). Some apps may not underline custom links; recipients can copy from the message if needed.
           </Text>
         </View>
 
@@ -380,7 +407,7 @@ const InviteContributorsScreen = () => {
             <Text style={styles.cardTitle}>Invite link</Text>
           </View>
           <Text style={styles.cardDescription}>
-            Unique link for this roll. Share it in messages or email. Recipients need the Rolls app to accept.
+            This is a Rolls app link (rollsapp://). It opens the invite in the app, not a web page. On Android, Share includes a second line that helps Gmail open the app.
           </Text>
           {loadingLink ? (
             <ActivityIndicator color={colors.buttonPrimary} style={{ marginVertical: 16 }} />
@@ -417,7 +444,7 @@ const InviteContributorsScreen = () => {
             <Text style={styles.cardTitle}>QR code</Text>
           </View>
           <Text style={styles.cardDescription}>
-            Encodes the same invite link. Scan with a phone that can open custom app links.
+            Same deep link as above — scanning opens Rolls to this invite.
           </Text>
           {loadingLink || !inviteLink ? (
             <ActivityIndicator color={colors.buttonPrimary} style={{ marginVertical: 24 }} />

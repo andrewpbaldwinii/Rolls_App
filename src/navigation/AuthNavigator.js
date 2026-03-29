@@ -63,8 +63,13 @@ const AuthNavigator = ({ navigationRef }) => {
     const parseInviteToken = (url) => {
       if (!url || !url.includes('rollsapp://roll/invite/')) return null;
       const rest = url.split('rollsapp://roll/invite/')[1] || '';
-      const token = rest.split(/[?#]/)[0]?.trim();
-      return token || null;
+      const raw = rest.split(/[?#]/)[0]?.trim();
+      if (!raw) return null;
+      try {
+        return decodeURIComponent(raw);
+      } catch {
+        return raw;
+      }
     };
 
     const handleDeepLink = (url) => {

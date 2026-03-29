@@ -12,6 +12,7 @@ import {
   Platform,
   Alert,
   PermissionsAndroid,
+  InteractionManager,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -48,6 +49,33 @@ const MessageScreen = ({ route, navigation }) => {
   const flatListRef = useRef(null);
 
   const effectiveConversationId = conversationId || conversation?.id;
+
+  const scrollToBottom = useCallback((animated = false) => {
+    InteractionManager.runAfterInteractions(() => {
+      requestAnimationFrame(() => {
+        flatListRef.current?.scrollToEnd({ animated });
+      });
+    });
+  }, []);
+
+  // After messages load, scroll to the true bottom (latest message from anyone).
+  // Default initialNumToRender is 10, so scrollToEnd used to stop at the wrong "bottom"
+  // until we raise initialNumToRender and scroll after loading finishes.
+  const prevLoadingRef = useRef(true);
+  useEffect(() => {
+    let t;
+    if (prevLoadingRef.current && !loading && messages.length > 0) {
+      t = setTimeout(() => scrollToBottom(false), 200);
+    }
+    prevLoadingRef.current = loading;
+    return () => {
+      if (t) clearTimeout(t);
+    };
+  }, [loading, messages.length, effectiveConversationId, scrollToBottom]);
+
+  useEffect(() => {
+    prevLoadingRef.current = true;
+  }, [effectiveConversationId]);
 
   const loadMessages = useCallback(async () => {
     if (!effectiveConversationId || !user?.id) return;
@@ -215,9 +243,7 @@ const MessageScreen = ({ route, navigation }) => {
       setMessageText('');
       setPendingAttachment(null);
 
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 100);
+      setTimeout(() => scrollToBottom(true), 100);
     } catch (error) {
       console.error('Error sending message:', error);
       Alert.alert(
@@ -335,9 +361,10 @@ const MessageScreen = ({ route, navigation }) => {
             renderItem={renderMessage}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.messagesList}
-            onContentSizeChange={() => {
-              flatListRef.current?.scrollToEnd({ animated: false });
-            }}
+            initialNumToRender={Math.min(50, Math.max(messages.length, 1))}
+            maxToRenderPerBatch={Math.min(25, Math.max(messages.length, 1))}
+            windowSize={21}
+            removeClippedSubviews={false}
           />
 
           {pendingAttachment ? (

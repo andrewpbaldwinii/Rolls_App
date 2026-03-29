@@ -1,0 +1,5 @@
+# Supabase CLI — https://supabase.com/docs/guides/cli
+# Deploy invite redirect: supabase functions deploy roll-invite
+
+[functions.roll-invite]
+verify_jwt = false

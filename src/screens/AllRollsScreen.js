@@ -19,7 +19,7 @@ const ITEMS_PER_PAGE = 20;
 
 const AllRollsScreen = () => {
   const { colors, isDark } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
@@ -64,65 +64,75 @@ const AllRollsScreen = () => {
     return (
       <TouchableOpacity
         style={styles.rollCard}
-        activeOpacity={0.7}
+        activeOpacity={0.72}
         onPress={() => {
           navigation.navigate('RollDetail', { rollId: roll.id, initialRoll: roll });
         }}
       >
-        <View style={styles.rollCardHeader}>
-          <Ionicons
-            name={isOwned ? 'camera' : 'people'}
-            size={24}
-            color={colors.buttonPrimary}
-          />
-          <View style={styles.rollCardInfo}>
-            <View style={styles.rollCardTitleRow}>
-              <Text style={styles.rollCardName}>{roll.title}</Text>
-              {isOwned && roll.is_public && (
-                <Ionicons name="globe" size={16} color={colors.primary} style={styles.publicIcon} />
-              )}
+        <View style={styles.rollCardInner}>
+          <View style={styles.rollCardBody}>
+            <View style={styles.rollCardTopRow}>
+              <View style={styles.rollCardTitleMain}>
+                <Text style={styles.rollCardName} numberOfLines={2}>
+                  {roll.title}
+                </Text>
+                {isOwned && roll.is_public && (
+                  <Ionicons name="globe" size={16} color={colors.primary} style={styles.publicIcon} />
+                )}
+              </View>
+              <View style={styles.chevronCircle}>
+                <Ionicons name="chevron-forward" size={18} color={colors.primary} />
+              </View>
             </View>
-            {roll.description && (
+            <View style={styles.rollMetaLine}>
+              <View style={styles.statusChip}>
+                <Text style={styles.statusChipText} numberOfLines={1}>
+                  {roll.status}
+                </Text>
+              </View>
+              {isOwned && (
+                <View
+                  style={[
+                    styles.visibilityChip,
+                    roll.is_public && styles.visibilityChipPublic,
+                  ]}
+                >
+                  <Ionicons
+                    name={roll.is_public ? 'globe-outline' : 'lock-closed-outline'}
+                    size={13}
+                    color={roll.is_public ? colors.primary : colors.textSecondary}
+                  />
+                  <Text
+                    style={[
+                      styles.visibilityChipText,
+                      roll.is_public && styles.visibilityChipTextActive,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {roll.is_public ? 'Public' : 'Private'}
+                  </Text>
+                </View>
+              )}
+              <Text style={styles.rollCardDateInline} numberOfLines={1}>
+                {roll.submission_deadline
+                  ? new Date(roll.submission_deadline).toLocaleDateString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })
+                  : 'No deadline'}
+              </Text>
+            </View>
+            {roll.description ? (
               <Text style={styles.rollCardDescription} numberOfLines={2}>
                 {roll.description}
               </Text>
-            )}
+            ) : null}
           </View>
-          <Ionicons name="chevron-forward" size={20} color={colors.textLight} />
-        </View>
-        <View style={styles.rollCardFooter}>
-          <View style={styles.rollCardFooterLeft}>
-            <View style={styles.rollCardFooterItem}>
-              <Text style={styles.rollCardStatus}>
-                Status: <Text style={styles.rollCardStatusValue}>{roll.status}</Text>
-              </Text>
-            </View>
-            {isOwned && (
-              <View style={styles.rollCardFooterItem}>
-                <Ionicons
-                  name={roll.is_public ? 'globe' : 'lock-closed'}
-                  size={14}
-                  color={roll.is_public ? colors.primary : colors.textSecondary}
-                />
-                <Text style={[styles.publicToggleText, roll.is_public && styles.publicToggleTextActive]}>
-                  {roll.is_public ? 'Public' : 'Private'}
-                </Text>
-              </View>
-            )}
-          </View>
-          <Text style={styles.rollCardDate}>
-            {roll.submission_deadline 
-              ? new Date(roll.submission_deadline).toLocaleDateString('en-US', {
-                  month: 'short',
-                  day: 'numeric',
-                  year: 'numeric'
-                })
-              : 'No deadline'}
-          </Text>
         </View>
       </TouchableOpacity>
     );
-  }, [isOwned, navigation]);
+  }, [colors, isOwned, navigation, styles]);
 
   const renderFooter = () => {
     if (!loadingMore) return null;
@@ -162,7 +172,7 @@ const AllRollsScreen = () => {
           onPress={() => navigation.goBack()}
           activeOpacity={0.7}
         >
-          <Ionicons name="arrow-back" size={24} color={colors.text} />
+          <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>
           {isOwned ? 'All My Rolls' : 'All Invited Rolls'}
@@ -203,7 +213,7 @@ const AllRollsScreen = () => {
   );
 };
 
-const createStyles = (colors) => StyleSheet.create({
+const createStyles = (colors, isDark) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -215,8 +225,8 @@ const createStyles = (colors) => StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 16,
     backgroundColor: colors.background,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.inputBorder,
   },
   backButton: {
     width: 40,
@@ -227,7 +237,7 @@ const createStyles = (colors) => StyleSheet.create({
   headerTitle: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: colors.text,
+    color: colors.textPrimary,
     flex: 1,
     textAlign: 'center',
   },
@@ -245,91 +255,132 @@ const createStyles = (colors) => StyleSheet.create({
     color: colors.textSecondary,
   },
   listContent: {
-    padding: 20,
+    paddingHorizontal: 18,
+    paddingTop: 12,
+    paddingBottom: 28,
   },
   emptyListContent: {
     flexGrow: 1,
   },
   rollCard: {
-    backgroundColor: colors.cardBackground,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    borderRadius: 26,
+    marginBottom: 14,
+    backgroundColor: colors.inputBackground,
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(94, 200, 191, 0.28)' : 'rgba(59, 184, 173, 0.22)',
+    overflow: 'hidden',
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: isDark ? 0.18 : 0.14,
+    shadowRadius: 14,
+    elevation: 6,
   },
-  rollCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
+  rollCardInner: {
+    paddingVertical: 16,
+    paddingHorizontal: 14,
   },
-  rollCardInfo: {
+  rollCardBody: {
     flex: 1,
-    marginLeft: 12,
+    minWidth: 0,
+    alignSelf: 'stretch',
   },
-  rollCardTitleRow: {
+  rollCardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 8,
+  },
+  rollCardTitleMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    minWidth: 0,
+  },
+  rollMetaLine: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 4,
+    flexWrap: 'wrap',
+    gap: 8,
+    justifyContent: 'flex-start',
+    alignSelf: 'stretch',
+    marginBottom: 8,
   },
   rollCardName: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: colors.text,
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+    color: colors.textPrimary,
     flex: 1,
+    minWidth: 0,
+    textAlign: 'left',
   },
   publicIcon: {
-    marginLeft: 8,
+    marginLeft: 6,
+    marginTop: 2,
   },
   rollCardDescription: {
     fontSize: 14,
     color: colors.textSecondary,
     lineHeight: 20,
+    marginBottom: 0,
   },
-  rollCardFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
+  statusChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    backgroundColor: isDark ? 'rgba(94, 200, 191, 0.16)' : 'rgba(59, 184, 173, 0.14)',
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(94, 200, 191, 0.28)' : 'rgba(59, 184, 173, 0.22)',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
-  rollCardFooterLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  rollCardFooterItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginRight: 16,
-  },
-  rollCardStatus: {
+  statusChipText: {
     fontSize: 12,
-    color: colors.textSecondary,
-  },
-  rollCardStatusValue: {
     fontWeight: '600',
-    color: colors.text,
+    color: colors.primary,
     textTransform: 'capitalize',
   },
-  publicToggleText: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    marginLeft: 4,
+  visibilityChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
+    gap: 4,
+    flexShrink: 0,
   },
-  publicToggleTextActive: {
+  visibilityChipPublic: {
+    borderColor: isDark ? 'rgba(94, 200, 191, 0.35)' : 'rgba(59, 184, 173, 0.35)',
+    backgroundColor: isDark ? 'rgba(94, 200, 191, 0.08)' : 'rgba(59, 184, 173, 0.06)',
+  },
+  visibilityChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  visibilityChipTextActive: {
     color: colors.primary,
   },
-  rollCardDate: {
+  rollCardDateInline: {
     fontSize: 12,
+    fontWeight: '500',
     color: colors.textSecondary,
+    flexShrink: 0,
+  },
+  chevronCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginTop: 0,
+    backgroundColor: isDark ? 'rgba(94, 200, 191, 0.12)' : 'rgba(59, 184, 173, 0.12)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
   },
   footerLoader: {
     paddingVertical: 20,
@@ -344,7 +395,7 @@ const createStyles = (colors) => StyleSheet.create({
   emptyTitle: {
     fontSize: 20,
     fontWeight: '600',
-    color: colors.text,
+    color: colors.textPrimary,
     marginTop: 16,
   },
   emptyText: {

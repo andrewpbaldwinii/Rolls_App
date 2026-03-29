@@ -1,4 +1,49 @@
+import { SUPABASE_URL } from '@env';
 import { supabase } from '../lib/supabase';
+
+/**
+ * Public https:// URL so SMS/email clients show a tappable link (rollsapp:// is not).
+ * Served by Supabase Edge Function `roll-invite` — deploy: npx supabase functions deploy roll-invite
+ */
+export function buildRollInviteHttpsUrl(token) {
+  if (!token || !SUPABASE_URL) return null;
+  const base = SUPABASE_URL.replace(/\/$/, '');
+  return `${base}/functions/v1/roll-invite?t=${encodeURIComponent(token)}`;
+}
+
+/**
+ * Deep link that opens Rolls directly to the invite (same as QR; no web page).
+ * Use buildRollInviteHttpsUrl only if you need a tappable https URL (e.g. legacy email templates).
+ */
+export function buildRollInviteUrlFromToken(token) {
+  const t = typeof token === 'string' ? token.trim() : '';
+  if (!t) return '';
+  return `rollsapp://roll/invite/${encodeURIComponent(t)}`;
+}
+
+/**
+ * Android intent:// URL so Gmail and similar clients can resolve the app without loading HTML.
+ */
+export function buildAndroidIntentInviteUrl(token) {
+  const t = typeof token === 'string' ? token.trim() : '';
+  if (!t) return '';
+  const path = encodeURIComponent(t);
+  return `intent://roll/invite/${path}#Intent;scheme=rollsapp;package=com.rollsapp;end`;
+}
+
+/** Parse token from rollsapp://roll/invite/<token> */
+export function parseTokenFromRollsappInviteLink(url) {
+  if (!url || typeof url !== 'string') return null;
+  if (!url.includes('rollsapp://roll/invite/')) return null;
+  const rest = url.split('rollsapp://roll/invite/')[1] || '';
+  const raw = rest.split(/[?#]/)[0]?.trim();
+  if (!raw) return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
 
 let hasLoggedRollInvitesTableMissing = false;
 
@@ -56,8 +101,7 @@ export const getRollInviteToken = async (rollId) => {
 export const getRollInviteLink = async (rollId) => {
   try {
     const token = await getRollInviteToken(rollId);
-    // Use the app's deep link scheme
-    return `rollsapp://roll/invite/${token}`;
+    return buildRollInviteUrlFromToken(token);
   } catch (error) {
     console.error('Error getting invite link:', error);
     throw error;
@@ -200,9 +244,8 @@ export const inviteEmailToRoll = async (rollId, email) => {
     }
 
     // TODO: Send email via Supabase Edge Function or external service
-    // For now, return the invite link
-    const inviteLink = `rollsapp://roll/invite/${token}`;
-    
+    const inviteLink = buildRollInviteUrlFromToken(token);
+
     return { ...data, invite_link: inviteLink };
   } catch (error) {
     console.error('Error inviting email to roll:', error);

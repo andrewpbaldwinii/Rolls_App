@@ -40,12 +40,22 @@
           <category android:name="android.intent.category.BROWSABLE" />
           <data android:scheme="https" android:host="wdduwfzzwwmwxgttilga.supabase.co" android:pathPrefix="/auth/v1/verify" />
         </intent-filter>
-        <!-- Deep link for roll invites -->
+        <!-- Deep link for roll invites - custom scheme -->
         <intent-filter>
           <action android:name="android.intent.action.VIEW" />
           <category android:name="android.intent.category.DEFAULT" />
           <category android:name="android.intent.category.BROWSABLE" />
           <data android:scheme="rollsapp" android:host="roll" android:pathPrefix="/invite" />
+        </intent-filter>
+        <!-- Deep link for roll invites - HTTPS -->
+        <intent-filter android:autoVerify="true">
+          <action android:name="android.intent.action.VIEW" />
+          <category android:name="android.intent.category.DEFAULT" />
+          <category android:name="android.intent.category.BROWSABLE" />
+          <data
+            android:scheme="https"
+            android:host="wdduwfzzwwmwxgttilga.supabase.co"
+            android:pathPrefix="/functions/v1/well-known/roll/invite" />
         </intent-filter>
       </activity>
       

@@ -1080,13 +1080,14 @@ const PublicProfileScreen = ({ route, navigation }) => {
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.messageButton}
+              activeOpacity={0.75}
               onPress={() => {
                 navigation.navigate('Message', {
                   userId: userId,
                 });
               }}
             >
-              <Ionicons name="mail-outline" size={20} color={colors.textWhite} />
+              <Ionicons name="chatbubble-outline" size={18} color={colors.primary} />
               <Text style={styles.messageButtonText}>Message</Text>
             </TouchableOpacity>
           </View>
@@ -1267,17 +1268,6 @@ const createStyles = (colors) => StyleSheet.create({
     textAlign: 'center',
     marginBottom: 32,
   },
-  followButton: {
-    backgroundColor: colors.primary,
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  followButtonText: {
-    color: colors.textWhite,
-    fontSize: 16,
-    fontWeight: '600',
-  },
   lockedContentContainer: {
     padding: 40,
     alignItems: 'center',
@@ -1400,17 +1390,25 @@ const createStyles = (colors) => StyleSheet.create({
     marginTop: 8,
   },
   actionButtonContainer: {
-    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     backgroundColor: colors.background,
     borderBottomWidth: 1,
     borderBottomColor: colors.inputBorder,
   },
   followButton: {
-    backgroundColor: colors.primary,
-    paddingVertical: 10,
-    paddingHorizontal: 24,
-    borderRadius: 8,
+    flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    minHeight: 46,
   },
   followingButton: {
     backgroundColor: colors.inputBackground,
@@ -1419,11 +1417,32 @@ const createStyles = (colors) => StyleSheet.create({
   },
   followButtonText: {
     color: colors.textWhite,
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
+    letterSpacing: 0.2,
   },
   followingButtonText: {
     color: colors.textPrimary,
+  },
+  messageButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    minHeight: 46,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    backgroundColor: colors.background,
+  },
+  messageButtonText: {
+    color: colors.primary,
+    fontSize: 15,
+    fontWeight: '600',
+    letterSpacing: 0.2,
   },
   viewModeContainer: {
     flexDirection: 'row',

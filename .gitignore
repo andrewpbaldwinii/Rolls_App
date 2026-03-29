@@ -37,6 +37,8 @@ local.properties
 # node.js
 #
 node_modules/
+# Accidental duplicate copy — confuses Metro/watchers; delete if present
+node_modules 2/
 npm-debug.log
 yarn-error.log
 
@@ -79,4 +81,7 @@ ios/Ionicons.ttf
 .env
 .env.local
 .env.*.local
+
+# Supabase CLI local cache (do not commit)
+supabase/.temp/
 

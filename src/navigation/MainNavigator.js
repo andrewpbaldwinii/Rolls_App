@@ -17,6 +17,9 @@ import MessageScreen from '../screens/MessageScreen';
 import InviteContributorsScreen from '../screens/InviteContributorsScreen';
 import InviteConfirmationScreen from '../screens/InviteConfirmationScreen';
 import AllRollsScreen from '../screens/AllRollsScreen';
+import HelpCenterScreen from '../screens/HelpCenterScreen';
+import HelpArticleScreen from '../screens/HelpArticleScreen';
+import AboutRollsScreen from '../screens/AboutRollsScreen';
 import CameraButton from '../components/CameraButton';
 import { useNotificationCounts } from '../contexts/NotificationCountsContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -253,6 +256,27 @@ const MainNavigator = () => {
       <Stack.Screen
         name="AllRolls"
         component={AllRollsScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="HelpCenter"
+        component={HelpCenterScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="HelpArticle"
+        component={HelpArticleScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="AboutRolls"
+        component={AboutRollsScreen}
         options={{
           presentation: 'card',
         }}

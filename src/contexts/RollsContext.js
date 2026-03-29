@@ -231,6 +231,8 @@ export const RollsProvider = ({ children }) => {
         status: calculatedStatus, // Use calculated status instead of default
         is_public: rollData.is_public || false,
         title_image_url: rollData.title_image_url || null,
+        contributor_photo_limit:
+          rollData.contributor_photo_limit != null ? rollData.contributor_photo_limit : null,
       };
 
       let roll;
@@ -248,12 +250,14 @@ export const RollsProvider = ({ children }) => {
         createError &&
         (createError.message?.includes('is_public') ||
           createError.message?.includes('title_image_url') ||
+          createError.message?.includes('contributor_photo_limit') ||
           createError.message?.toLowerCase()?.includes('schema cache'))
       ) {
         console.warn(
-          'Rolls table is missing is_public/title_image_url. Retrying without those fields. Run ROLLS_PUBLIC_AND_TITLE_IMAGE_MIGRATION.sql in Supabase.'
+          'Rolls table is missing optional columns. Retrying without them. Run ROLLS_PUBLIC_AND_TITLE_IMAGE_MIGRATION.sql / ADD_CONTRIBUTOR_PHOTO_LIMIT.sql in Supabase.'
         );
-        const { is_public, title_image_url, ...fallbackPayload } = insertPayload;
+        const { is_public, title_image_url, contributor_photo_limit, ...fallbackPayload } =
+          insertPayload;
         ({ data: roll, error: createError } = await supabase
           .from('rolls')
           .insert([fallbackPayload])
@@ -344,12 +348,14 @@ export const RollsProvider = ({ children }) => {
           updateError.code === 'PGRST204' &&
           (updateError.message?.includes('title_image_url') ||
             updateError.message?.includes('is_public') ||
+            updateError.message?.includes('contributor_photo_limit') ||
             updateError.message?.toLowerCase()?.includes('schema cache'))
         ) {
           throw new Error(
             'Your Supabase database is missing new Roll columns (or the API schema cache has not refreshed).\n\n' +
               'In Supabase Dashboard → SQL Editor, run:\n' +
-              '- ROLLS_PUBLIC_AND_TITLE_IMAGE_MIGRATION.sql\n\n' +
+              '- ROLLS_PUBLIC_AND_TITLE_IMAGE_MIGRATION.sql\n' +
+              '- ADD_CONTRIBUTOR_PHOTO_LIMIT.sql\n\n' +
               'Then retry. If it still fails, wait 1–2 minutes or restart the Supabase API/project to refresh the schema cache.'
           );
         }
@@ -401,6 +407,52 @@ export const RollsProvider = ({ children }) => {
     }
 
     try {
+      let { data: rollRow, error: rollFetchError } = await supabase
+        .from('rolls')
+        .select('creator_id, contributor_photo_limit')
+        .eq('id', rollId)
+        .single();
+
+      if (
+        rollFetchError &&
+        (rollFetchError.message?.includes('contributor_photo_limit') ||
+          rollFetchError.message?.toLowerCase()?.includes('schema cache'))
+      ) {
+        const retry = await supabase
+          .from('rolls')
+          .select('creator_id')
+          .eq('id', rollId)
+          .single();
+        if (retry.error) {
+          throw new Error(retry.error.message || 'Could not load roll');
+        }
+        rollRow = { ...retry.data, contributor_photo_limit: null };
+      } else if (rollFetchError) {
+        throw new Error(rollFetchError.message || 'Could not load roll');
+      }
+
+      const isOwner = rollRow?.creator_id === user.id;
+      const limit = rollRow?.contributor_photo_limit;
+
+      if (!isOwner && limit != null && limit >= 1) {
+        const { count, error: countError } = await supabase
+          .from('roll_images')
+          .select('*', { count: 'exact', head: true })
+          .eq('roll_id', rollId)
+          .eq('contributor_id', user.id)
+          .neq('caption', '__title_image__');
+
+        if (countError) {
+          throw new Error(countError.message || 'Could not check photo count');
+        }
+        const current = count ?? 0;
+        if (current >= limit) {
+          throw new Error(
+            `You have reached the maximum of ${limit} photo${limit === 1 ? '' : 's'} for this roll (contributor limit set by the owner).`
+          );
+        }
+      }
+
       console.log('📝 Adding image to roll_images table...', { 
         rollId, 
         rollIdType: typeof rollId,

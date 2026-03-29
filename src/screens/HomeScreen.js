@@ -584,7 +584,24 @@ const HomeScreen = () => {
         </View>
       </View>
     );
-  }, [handleUserPress, handleImagePress, handleLike, handleComment, handleCommentSubmit, loadComments, itemInteractions, itemComments, loadingComments, commentingItemId, commentText, submittingComment, user, navigation]);
+  }, [
+    handleUserPress,
+    handleImagePress,
+    handleLike,
+    handleComment,
+    handleCommentSubmit,
+    loadComments,
+    itemInteractions,
+    itemComments,
+    loadingComments,
+    commentingItemId,
+    commentText,
+    submittingComment,
+    user,
+    navigation,
+    styles,
+    colors,
+  ]);
 
   const renderFooter = useCallback(() => {
     if (!loadingMore) return null;
@@ -593,7 +610,7 @@ const HomeScreen = () => {
         <ActivityIndicator size="small" color={colors.primary} />
       </View>
     );
-  }, [loadingMore]);
+  }, [loadingMore, styles, colors]);
 
   const renderEmpty = useCallback(() => {
     if (loading) return null;
@@ -606,7 +623,7 @@ const HomeScreen = () => {
         </Text>
       </View>
     );
-  }, [loading]);
+  }, [loading, styles, colors]);
 
   if (loading && items.length === 0) {
     return (
@@ -637,6 +654,7 @@ const HomeScreen = () => {
         data={items}
         renderItem={renderItem}
         keyExtractor={(item) => `${item.type}-${item.id}`}
+        extraData={isDark}
         onEndReached={handleLoadMore}
         onEndReachedThreshold={0.5}
         refreshControl={

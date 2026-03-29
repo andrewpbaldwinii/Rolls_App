@@ -228,7 +228,10 @@ const NotificationsScreen = ({ navigation }) => {
             }
             if (item.type === 'message' && item.related_user_id) {
               navigation.navigate('Message', { userId: item.related_user_id });
-            } else if (item.type === 'roll_invite' && item.related_roll_id) {
+            } else if (
+              (item.type === 'roll_invite' || item.type === 'roll_developed') &&
+              item.related_roll_id
+            ) {
               navigation.navigate('RollDetail', {
                 rollId: item.related_roll_id,
               });
@@ -250,6 +253,9 @@ const NotificationsScreen = ({ navigation }) => {
             )}
             {item.type === 'roll_invite' && (
               <Ionicons name="mail-open" size={24} color={colors.primary} />
+            )}
+            {item.type === 'roll_developed' && (
+              <Ionicons name="images" size={24} color={colors.primary} />
             )}
           </View>
           <View style={styles.notificationContent}>
@@ -354,7 +360,7 @@ const NotificationsScreen = ({ navigation }) => {
           <Ionicons name="notifications-outline" size={64} color={colors.textSecondary} />
           <Text style={styles.emptyTitle}>No notifications</Text>
           <Text style={styles.emptyText}>
-            You'll see alerts for invites, comments, likes, and more here
+            You'll see alerts for invites, when rolls are ready to view, comments, likes, and more here
           </Text>
         </View>
       ) : (

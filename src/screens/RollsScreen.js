@@ -28,9 +28,21 @@ import { supabase } from '../lib/supabase';
 import { useTheme } from '../contexts/ThemeContext';
 
 const { width } = Dimensions.get('window');
+
+/** @returns {number|null} null = no limit */
+function parseContributorPhotoLimitInput(text) {
+  const t = (text || '').trim();
+  if (!t) return null;
+  const n = parseInt(t, 10);
+  if (Number.isNaN(n) || n < 1) {
+    throw new Error('Photo limit must be a whole number of 1 or more, or leave blank for no limit.');
+  }
+  return n;
+}
+
 const RollsScreen = () => {
   const { colors, isDark } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
@@ -52,6 +64,7 @@ const RollsScreen = () => {
   const [titleImageUri, setTitleImageUri] = useState(null);
   const [titleImageBase64, setTitleImageBase64] = useState(null);
   const [uploadingTitleImage, setUploadingTitleImage] = useState(false);
+  const [contributorPhotoLimitText, setContributorPhotoLimitText] = useState('');
 
   const ownedRolls = getOwnedRolls().filter(
     roll => roll.title?.toLowerCase() !== 'profile photos'
@@ -264,6 +277,14 @@ const RollsScreen = () => {
       return;
     }
 
+    let contributorPhotoLimit;
+    try {
+      contributorPhotoLimit = parseContributorPhotoLimitInput(contributorPhotoLimitText);
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Invalid photo limit');
+      return;
+    }
+
     setCreating(true);
     try {
       // Create roll first to get the roll ID
@@ -274,6 +295,7 @@ const RollsScreen = () => {
         release_date: releaseDate ? releaseDate.toISOString() : null,
         status: 'active',
         is_public: isPublic,
+        contributor_photo_limit: contributorPhotoLimit,
       });
 
       // Upload title image if selected (optimize with optimistic update)
@@ -315,6 +337,7 @@ const RollsScreen = () => {
       setSubmissionDeadline(new Date());
       setReleaseDate(null);
       setIsPublic(false);
+      setContributorPhotoLimitText('');
       setTitleImageUri(null);
       setTitleImageBase64(null);
       setShowCreateModal(false);
@@ -381,6 +404,9 @@ const RollsScreen = () => {
     setRollDescription(roll.description || '');
     setSubmissionDeadline(roll.submission_deadline ? new Date(roll.submission_deadline) : new Date());
     setReleaseDate(roll.release_date ? new Date(roll.release_date) : null);
+    setContributorPhotoLimitText(
+      roll.contributor_photo_limit != null ? String(roll.contributor_photo_limit) : '',
+    );
     setShowEditModal(true);
   };
 
@@ -405,6 +431,14 @@ const RollsScreen = () => {
       return;
     }
 
+    let contributorPhotoLimit;
+    try {
+      contributorPhotoLimit = parseContributorPhotoLimitInput(contributorPhotoLimitText);
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Invalid photo limit');
+      return;
+    }
+
     setUpdating(true);
     try {
       // Update roll data first (faster, doesn't require image upload)
@@ -413,6 +447,7 @@ const RollsScreen = () => {
         description: rollDescription.trim() || null,
         submission_deadline: submissionDeadline.toISOString(),
         release_date: releaseDate ? releaseDate.toISOString() : null,
+        contributor_photo_limit: contributorPhotoLimit,
       });
       
       // Handle title image upload separately (can be slow)
@@ -451,6 +486,7 @@ const RollsScreen = () => {
       setRollDescription('');
       setSubmissionDeadline(new Date());
       setReleaseDate(null);
+      setContributorPhotoLimitText('');
       setTitleImageUri(null);
       setTitleImageBase64(null);
       setEditingRoll(null);
@@ -471,6 +507,7 @@ const RollsScreen = () => {
     setRollDescription('');
     setSubmissionDeadline(new Date());
     setReleaseDate(null);
+    setContributorPhotoLimitText('');
     setShowSubmissionDatePicker(false);
     setShowReleaseDatePicker(false);
   };
@@ -496,17 +533,72 @@ const RollsScreen = () => {
           </View>
         ) : null}
         <View style={styles.rollCardHeader}>
-          <Ionicons
-            name={isOwned ? 'camera' : 'people'}
-            size={24}
-            color={colors.buttonPrimary}
-          />
           <View style={styles.rollCardInfo}>
-            <View style={styles.rollCardTitleRow}>
-              <Text style={styles.rollCardName}>{roll.title}</Text>
-              {isOwned && roll.is_public && (
-                <Ionicons name="globe" size={16} color={colors.primary} style={styles.publicIcon} />
+            <View style={styles.rollCardHeaderTopRow}>
+              <View style={styles.rollCardTitleMain}>
+                <Text style={styles.rollCardName} numberOfLines={2}>
+                  {roll.title}
+                </Text>
+                {isOwned && roll.is_public && (
+                  <Ionicons name="globe" size={16} color={colors.primary} style={styles.publicIcon} />
+                )}
+              </View>
+              <View style={styles.rollCardHeaderRight}>
+                {isOwned && (
+                  <TouchableOpacity
+                    style={styles.editButton}
+                    onPress={onEdit}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="create-outline" size={20} color={colors.buttonPrimary} />
+                  </TouchableOpacity>
+                )}
+                <Ionicons name="chevron-forward" size={20} color={colors.textLight} />
+              </View>
+            </View>
+            <View style={styles.rollMetaLine}>
+              <View style={styles.rollStatusChip}>
+                <Text style={styles.rollStatusChipText} numberOfLines={1}>
+                  {roll.status}
+                </Text>
+              </View>
+              {isOwned && (
+                <TouchableOpacity
+                  style={[
+                    styles.rollVisibilityChip,
+                    roll.is_public && styles.rollVisibilityChipPublic,
+                  ]}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    onTogglePublic(roll.id, roll.is_public);
+                  }}
+                  activeOpacity={0.75}
+                >
+                  <Ionicons
+                    name={roll.is_public ? 'globe-outline' : 'lock-closed-outline'}
+                    size={13}
+                    color={roll.is_public ? colors.primary : colors.textSecondary}
+                  />
+                  <Text
+                    style={[
+                      styles.rollVisibilityChipText,
+                      roll.is_public && styles.rollVisibilityChipTextActive,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {roll.is_public ? 'Public' : 'Private'}
+                  </Text>
+                </TouchableOpacity>
               )}
+              <Text style={styles.rollCardDateInline} numberOfLines={1}>
+                {roll.submission_deadline
+                  ? new Date(roll.submission_deadline).toLocaleDateString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })
+                  : 'No deadline'}
+              </Text>
             </View>
             {roll.description && (
               <Text style={styles.rollCardDescription} numberOfLines={2}>
@@ -514,58 +606,14 @@ const RollsScreen = () => {
               </Text>
             )}
           </View>
-          <View style={styles.rollCardHeaderRight}>
-            {isOwned && (
-              <TouchableOpacity
-                style={styles.editButton}
-                onPress={onEdit}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="create-outline" size={20} color={colors.buttonPrimary} />
-              </TouchableOpacity>
-            )}
-            <Ionicons name="chevron-forward" size={20} color={colors.textLight} />
-          </View>
         </View>
         <View style={styles.rollCardFooter}>
-          <View style={styles.rollCardFooterLeft}>
-            <View style={styles.rollCardFooterItem}>
-              <Text style={styles.rollCardStatus}>
-                Status: <Text style={styles.rollCardStatusValue}>{roll.status}</Text>
-              </Text>
-            </View>
-            <View style={[styles.rollCardFooterItem, styles.photoCountContainer]}>
-              <Ionicons name="images" size={14} color={colors.textSecondary} />
-              <Text style={styles.photoCountText}>{photoCount} photo{photoCount !== 1 ? 's' : ''}</Text>
-            </View>
-            {isOwned && (
-              <TouchableOpacity
-                style={[styles.publicToggle, styles.rollCardFooterItem]}
-                onPress={(e) => {
-                  e.stopPropagation();
-                  onTogglePublic(roll.id, roll.is_public);
-                }}
-              >
-                <Ionicons
-                  name={roll.is_public ? 'globe' : 'lock-closed'}
-                  size={14}
-                  color={roll.is_public ? colors.primary : colors.textSecondary}
-                />
-                <Text style={[styles.publicToggleText, roll.is_public && styles.publicToggleTextActive]}>
-                  {roll.is_public ? 'Public' : 'Private'}
-                </Text>
-              </TouchableOpacity>
-            )}
+          <View style={styles.rollCardFooterPhotoRow}>
+            <Ionicons name="images" size={14} color={colors.textSecondary} />
+            <Text style={styles.photoCountText} numberOfLines={1}>
+              {photoCount} photo{photoCount !== 1 ? 's' : ''}
+            </Text>
           </View>
-          <Text style={styles.rollCardDate}>
-            {roll.submission_deadline 
-              ? new Date(roll.submission_deadline).toLocaleDateString('en-US', {
-                  month: 'short',
-                  day: 'numeric',
-                  year: 'numeric'
-                })
-              : 'No deadline'}
-          </Text>
         </View>
       </TouchableOpacity>
     );
@@ -789,6 +837,21 @@ const RollsScreen = () => {
                 textAlignVertical="top"
               />
 
+              <Text style={[styles.inputLabel, styles.inputLabelMargin]}>Contributor photo limit (Optional)</Text>
+              <Text style={styles.inputHelperText}>
+                Max photos each invited contributor may add. Leave blank for no limit. You (the owner) are not limited.
+              </Text>
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. 10"
+                placeholderTextColor={colors.inputPlaceholder}
+                value={contributorPhotoLimitText}
+                onChangeText={setContributorPhotoLimitText}
+                keyboardType="number-pad"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+
               <Text style={[styles.inputLabel, styles.inputLabelMargin]}>Submission Deadline *</Text>
               <TouchableOpacity
                 style={styles.datePickerButton}
@@ -990,6 +1053,7 @@ const RollsScreen = () => {
                   setSubmissionDeadline(new Date());
                   setReleaseDate(null);
                   setIsPublic(false);
+                  setContributorPhotoLimitText('');
                   setTitleImageUri(null);
                   setTitleImageBase64(null);
                   setShowSubmissionDatePicker(false);
@@ -1027,6 +1091,21 @@ const RollsScreen = () => {
                 multiline
                 numberOfLines={4}
                 textAlignVertical="top"
+              />
+
+              <Text style={[styles.inputLabel, styles.inputLabelMargin]}>Contributor photo limit (Optional)</Text>
+              <Text style={styles.inputHelperText}>
+                Max photos each invited contributor may add. Leave blank for no limit. You (the owner) are not limited.
+              </Text>
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. 10"
+                placeholderTextColor={colors.inputPlaceholder}
+                value={contributorPhotoLimitText}
+                onChangeText={setContributorPhotoLimitText}
+                keyboardType="number-pad"
+                autoCapitalize="none"
+                autoCorrect={false}
               />
 
               <Text style={[styles.inputLabel, styles.inputLabelMargin]}>Submission Deadline *</Text>
@@ -1273,7 +1352,7 @@ const RollsScreen = () => {
   );
 };
 
-const createStyles = (colors) => StyleSheet.create({
+const createStyles = (colors, isDark) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.backgroundLight,
@@ -1385,34 +1464,97 @@ const createStyles = (colors) => StyleSheet.create({
     elevation: 3,
   },
   rollCardHeader: {
+    marginBottom: 12,
+  },
+  rollCardHeaderTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 8,
+  },
+  rollMetaLine: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    flexWrap: 'wrap',
+    gap: 8,
+    justifyContent: 'flex-start',
+    alignSelf: 'stretch',
+    marginBottom: 8,
+  },
+  rollStatusChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    backgroundColor: isDark ? 'rgba(94, 200, 191, 0.16)' : 'rgba(59, 184, 173, 0.14)',
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(94, 200, 191, 0.28)' : 'rgba(59, 184, 173, 0.22)',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  rollStatusChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.primary,
+    textTransform: 'capitalize',
+    textAlign: 'center',
+  },
+  rollVisibilityChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
+    gap: 4,
+    flexShrink: 0,
+  },
+  rollVisibilityChipPublic: {
+    borderColor: isDark ? 'rgba(94, 200, 191, 0.35)' : 'rgba(59, 184, 173, 0.35)',
+    backgroundColor: isDark ? 'rgba(94, 200, 191, 0.08)' : 'rgba(59, 184, 173, 0.06)',
+  },
+  rollVisibilityChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  rollVisibilityChipTextActive: {
+    color: colors.primary,
   },
   rollCardInfo: {
     flex: 1,
-    marginLeft: 12,
+    minWidth: 0,
+    alignSelf: 'stretch',
   },
   rollCardHeaderRight: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexShrink: 0,
+    gap: 4,
   },
   editButton: {
     padding: 4,
   },
-  rollCardTitleRow: {
+  rollCardTitleMain: {
+    flex: 1,
     flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 4,
+    alignItems: 'flex-start',
+    minWidth: 0,
   },
   rollCardName: {
     fontSize: 18,
     fontWeight: '600',
     color: colors.textPrimary,
     flex: 1,
+    minWidth: 0,
+    textAlign: 'left',
   },
   publicIcon: {
     marginLeft: 8,
+    marginTop: 2,
   },
   rollCardDescription: {
     fontSize: 14,
@@ -1420,37 +1562,14 @@ const createStyles = (colors) => StyleSheet.create({
   },
   rollCardFooter: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
     paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: colors.inputBorder,
   },
-  rollCardFooterLeft: {
+  rollCardFooterPhotoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    flex: 1,
-    flexWrap: 'wrap',
-  },
-  rollCardFooterItem: {
-    marginRight: 12,
-  },
-  publicToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-    backgroundColor: colors.inputBackground,
-  },
-  publicToggleText: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    marginLeft: 4,
-  },
-  publicToggleTextActive: {
-    color: colors.primary,
-    fontWeight: '600',
   },
   publicToggleContainer: {
     marginTop: 8,
@@ -1507,27 +1626,16 @@ const createStyles = (colors) => StyleSheet.create({
     fontSize: 14,
     color: colors.error,
   },
-  rollCardStatus: {
-    fontSize: 12,
-    color: colors.textSecondary,
-  },
-  rollCardStatusValue: {
-    fontWeight: '600',
-    color: colors.textPrimary,
-    textTransform: 'capitalize',
-  },
-  photoCountContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
   photoCountText: {
     fontSize: 12,
     color: colors.textSecondary,
     marginLeft: 4,
   },
-  rollCardDate: {
+  rollCardDateInline: {
     fontSize: 12,
     color: colors.textSecondary,
+    flexShrink: 0,
+    fontWeight: '500',
   },
   rollCardImageContainer: {
     width: '100%',

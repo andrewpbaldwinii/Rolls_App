@@ -131,3 +131,17 @@ dependencies {
 }
 
 apply from: "../../node_modules/react-native-vector-icons/fonts.gradle"
+
+// Finder duplicates (e.g. "ic_launcher 2.png") break mergeDebugResources — fix before every merge.
+def rollsAppRoot = file("../../").canonicalFile
+tasks.register('fixMipmapDupes', Exec) {
+    group = 'build'
+    description = 'Rename/remove invalid mipmap names (spaces). See scripts/fix-android-mipmap-dupes.sh'
+    workingDir rollsAppRoot
+    environment 'MIPMAP_FIX_QUIET', '1'
+    commandLine 'bash', 'scripts/fix-android-mipmap-dupes.sh'
+}
+afterEvaluate {
+    tasks.named('mergeDebugResources').configure { dependsOn fixMipmapDupes }
+    tasks.named('mergeReleaseResources').configure { dependsOn fixMipmapDupes }
+}

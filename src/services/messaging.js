@@ -100,8 +100,13 @@ export const getMessages = async (conversationId, limit = 50, offset = 0) => {
     if (error) throw error;
     if (!messages || messages.length === 0) return [];
 
+    // Oldest → newest (never mutate Supabase result in place)
+    const chronological = [...messages].reverse().sort(
+      (a, b) => new Date(a.created_at) - new Date(b.created_at)
+    );
+
     // Get unique sender IDs
-    const senderIds = [...new Set(messages.map(m => m.sender_id))];
+    const senderIds = [...new Set(chronological.map(m => m.sender_id))];
 
     // Fetch sender user data
     const { data: users, error: usersError } = await supabase
@@ -127,7 +132,7 @@ export const getMessages = async (conversationId, limit = 50, offset = 0) => {
     }
 
     // Add sender data to messages
-    return messages.reverse().map(msg => ({
+    return chronological.map(msg => ({
       ...msg,
       sender: userMap.get(msg.sender_id) || {
         id: msg.sender_id,

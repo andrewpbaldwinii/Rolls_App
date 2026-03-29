@@ -649,12 +649,16 @@ const ProfileScreen = ({ navigation }) => {
           <SettingItem
             icon="camera-outline"
             label="My Rolls"
-            onPress={() => console.log('My Rolls')}
+            onPress={() =>
+              navigation.navigate('AllRolls', { sectionType: 'owned' })
+            }
           />
           <SettingItem
             icon="people-outline"
             label="Rolls I've Joined"
-            onPress={() => console.log('Rolls I\'ve Joined')}
+            onPress={() =>
+              navigation.navigate('AllRolls', { sectionType: 'contributed' })
+            }
           />
           <SettingItem
             icon="archive-outline"
@@ -762,7 +766,7 @@ const ProfileScreen = ({ navigation }) => {
           <SettingItem
             icon="help-circle-outline"
             label="Help & FAQ"
-            onPress={() => console.log('Help & FAQ')}
+            onPress={() => navigation.navigate('HelpCenter')}
           />
           <SettingItem
             icon="mail-outline"
@@ -771,8 +775,8 @@ const ProfileScreen = ({ navigation }) => {
           />
           <SettingItem
             icon="information-circle-outline"
-            label="About Roll"
-            onPress={() => console.log('About Roll')}
+            label="About Rolls"
+            onPress={() => navigation.navigate('AboutRolls')}
           />
         </View>
 
