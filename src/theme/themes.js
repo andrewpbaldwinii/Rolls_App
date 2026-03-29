@@ -63,7 +63,7 @@ export const darkColors = {
   error: '#FF453A',
   warning: '#FF9F0A',
 
-  navBackground: '#2DB3AA',
+  navBackground: '#000000',
   navActive: '#D4AA3D',
   navInactive: '#FFFFFF',
   navInactiveLabel: 'rgba(255,255,255,0.7)',

@@ -96,10 +96,22 @@ export const NotificationCountsProvider = ({ children }) => {
         }
       )
       .subscribe((status, err) => {
-        if (status === 'CHANNEL_ERROR' && __DEV__) {
+        if (status === 'SUBSCRIBED' || status === 'CLOSED') {
+          return;
+        }
+        if (__DEV__ && (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT')) {
+          const detail =
+            err?.message ||
+            err?.toString?.() ||
+            (typeof err === 'object' && err !== null
+              ? JSON.stringify(err)
+              : String(err));
           console.warn(
-            '[NotificationCounts] Realtime subscription error — enable Realtime for public.notifications and public.messages in Supabase:',
-            err?.message || err
+            '[NotificationCounts] Realtime:',
+            status,
+            detail !== 'undefined' ? detail : '(no error detail — check Supabase)',
+            '\n→ Database → Publications → supabase_realtime: include notifications & messages.',
+            '\n→ Or run ENABLE_REALTIME_NOTIFICATIONS_MESSAGES.sql in SQL Editor.',
           );
         }
       });
