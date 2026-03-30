@@ -28,18 +28,19 @@ CREATE INDEX IF NOT EXISTS idx_photo_likes_created ON photo_likes(created_at DES
 -- Enable RLS on photo_likes
 ALTER TABLE photo_likes ENABLE ROW LEVEL SECURITY;
 
--- RLS Policies for photo_likes
--- Anyone can view likes
+-- RLS Policies for photo_likes (drop first so this script can be re-run safely)
+DROP POLICY IF EXISTS "Anyone can view likes" ON photo_likes;
+DROP POLICY IF EXISTS "Users can like photos" ON photo_likes;
+DROP POLICY IF EXISTS "Users can unlike photos" ON photo_likes;
+
 CREATE POLICY "Anyone can view likes"
   ON photo_likes FOR SELECT
   USING (true);
 
--- Users can like photos (including their own)
 CREATE POLICY "Users can like photos"
   ON photo_likes FOR INSERT
   WITH CHECK (auth.uid() = user_id);
 
--- Users can unlike photos (only their own likes)
 CREATE POLICY "Users can unlike photos"
   ON photo_likes FOR DELETE
   USING (auth.uid() = user_id);
@@ -66,24 +67,24 @@ CREATE INDEX IF NOT EXISTS idx_photo_comments_created ON photo_comments(created_
 -- Enable RLS on photo_comments
 ALTER TABLE photo_comments ENABLE ROW LEVEL SECURITY;
 
--- RLS Policies for photo_comments
--- Anyone can view comments
+DROP POLICY IF EXISTS "Anyone can view comments" ON photo_comments;
+DROP POLICY IF EXISTS "Users can comment on photos" ON photo_comments;
+DROP POLICY IF EXISTS "Users can edit their own comments" ON photo_comments;
+DROP POLICY IF EXISTS "Users can delete their own comments" ON photo_comments;
+
 CREATE POLICY "Anyone can view comments"
   ON photo_comments FOR SELECT
   USING (true);
 
--- Users can comment on photos (including their own)
 CREATE POLICY "Users can comment on photos"
   ON photo_comments FOR INSERT
   WITH CHECK (auth.uid() = user_id);
 
--- Users can edit their own comments
 CREATE POLICY "Users can edit their own comments"
   ON photo_comments FOR UPDATE
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
--- Users can delete their own comments
 CREATE POLICY "Users can delete their own comments"
   ON photo_comments FOR DELETE
   USING (auth.uid() = user_id);

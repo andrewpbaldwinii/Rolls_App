@@ -175,7 +175,18 @@ export const sendMessage = async (
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      const msg = error.message || '';
+      if (msg.includes('Messaging blocked') || msg.includes('user blocked')) {
+        throw new Error('You cannot message this user.');
+      }
+      if (msg.includes('mutual followers')) {
+        throw new Error(
+          'This user only accepts messages from mutual followers (friends).'
+        );
+      }
+      throw error;
+    }
     return data;
   } catch (error) {
     console.error('Error sending message:', error);
