@@ -30,10 +30,10 @@ react {
     // cliFile = file("../../node_modules/react-native/cli.js")
 
     /* Variants */
-    //   The list of variants to that are debuggable. For those we're going to
-    //   skip the bundling of the JS bundle and the assets. By default is just 'debug'.
-    //   If you add flavors like lite, prod, etc. you'll have to list your debuggableVariants.
-    // debuggableVariants = ["liteDebug", "prodDebug"]
+    //   By default 'debug' is listed: Gradle skips embedding JS so the app loads from Metro (live reload).
+    //   Empty list = bundle JS into debug APK too, so app-debug.apk sideloaded without Metro matches your code.
+    //   Remove or comment the next line if you prefer classic dev-only Metro for debug builds.
+    debuggableVariants = []
 
     /* Bundling */
     //   A list containing the node command and its flags. Default is just 'node'.
