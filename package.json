@@ -18,7 +18,7 @@
     "lint": "eslint .",
     "start": "react-native start --host 0.0.0.0",
     "test": "jest",
-    "generate:launcher": "node scripts/generate-launcher-icons-home.mjs"
+    "generate:launcher": "node scripts/generate-launcher-icons-default.mjs"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.2.0",
