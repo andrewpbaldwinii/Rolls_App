@@ -23,10 +23,17 @@ for dir in "$RES"/mipmap-*; do
   rm -f "$dir/ic_launcher_2.png" "$dir/ic_launcher_round_2.png" 2>/dev/null || true
 done
 
-BAD=$(find "$RES" -name '* *' -type f 2>/dev/null | wc -l | tr -d ' ')
-if [ "$BAD" != 0 ]; then
-  echo "Still have res files with spaces — remove or rename manually:" >&2
-  find "$RES" -name '* *' -type f >&2
+# Any other mipmap file with a space in the name is invalid — remove (e.g. mis-copied assets).
+while IFS= read -r -d '' bad; do
+  rm -f "$bad"
+  log "Removed invalid (space in name): $bad"
+done < <(find "$RES" -path '*/mipmap-*/*' -name '* *' -type f -print0 2>/dev/null)
+
+# Only mipmaps are auto-cleaned; other res/* paths with spaces still break merge—report them.
+BAD_NON_MIPMAP=$(find "$RES" -name '* *' -type f ! -path '*/mipmap-*/*' 2>/dev/null | wc -l | tr -d ' ')
+if [ "$BAD_NON_MIPMAP" != 0 ]; then
+  echo "Resource files with spaces (invalid on Android). Rename or delete:" >&2
+  find "$RES" -name '* *' -type f ! -path '*/mipmap-*/*' >&2
   exit 1
 fi
-log "OK: no mipmap files with spaces under res/"
+log "OK: no resource files with spaces under res/"

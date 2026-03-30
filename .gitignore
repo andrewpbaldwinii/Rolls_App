@@ -39,6 +39,10 @@ local.properties
 node_modules/
 # Accidental duplicate copy — confuses Metro/watchers; delete if present
 node_modules 2/
+node_modules 3/
+
+# Duplicate Android build dirs (e.g. Finder "build 2")
+**/build 2/
 npm-debug.log
 yarn-error.log
 

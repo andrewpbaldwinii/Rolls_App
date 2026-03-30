@@ -137,6 +137,7 @@ export async function deleteMyAccount() {
     await AsyncStorage.multiRemove([
       `@rolls/shipping_address_v1/${userId}`,
       `@rolls/private_location_v1/${userId}`,
+      `@rolls/print_orders_v1/${userId}`,
     ]);
   } catch (e) {
     console.warn('[accountDeletion] local preferences cleanup', e?.message || e);

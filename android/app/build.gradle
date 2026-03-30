@@ -142,6 +142,28 @@ tasks.register('fixMipmapDupes', Exec) {
     commandLine 'bash', 'scripts/fix-android-mipmap-dupes.sh'
 }
 afterEvaluate {
-    tasks.named('mergeDebugResources').configure { dependsOn fixMipmapDupes }
-    tasks.named('mergeReleaseResources').configure { dependsOn fixMipmapDupes }
+    // Every resource merge (debug/release) must run after cleanup so Finder dupes never break the build.
+    ['mergeDebugResources', 'mergeReleaseResources'].each { taskName ->
+        def t = tasks.findByName(taskName)
+        if (t != null) {
+            t.dependsOn(fixMipmapDupes)
+        }
+    }
+    // Ensure JS bundle output dirs exist before Metro writes (ENOENT after partial cleans; some RN paths use task name as folder).
+    tasks.matching { it.name ==~ /^createBundle\w+JsAndAssets$/ }.configureEach { bundleTask ->
+        bundleTask.doFirst {
+            def b = bundleTask.project.layout.buildDirectory.get().asFile
+            [
+                "generated/assets/${bundleTask.name}",
+                "generated/res/react/debug",
+                "generated/res/react/release",
+                "generated/assets/react/debug",
+                "generated/assets/react/release",
+                "generated/sourcemaps/react/debug",
+                "generated/sourcemaps/react/release",
+                "intermediates/sourcemaps/react/debug",
+                "intermediates/sourcemaps/react/release",
+            ].each { rel -> new File(b, rel).mkdirs() }
+        }
+    }
 }

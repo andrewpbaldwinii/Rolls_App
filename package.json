@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "postinstall": "bash scripts/ensure-macos-hermesc.sh",
+    "postinstall": "bash scripts/ensure-macos-hermesc.sh && bash scripts/patch-gesture-handler-cmake.sh",
     "android:emulator": "bash scripts/start-android-emulator.sh",
     "android:pixel8": "bash scripts/run-android-on-avd.sh Pixel_8",
     "android": "react-native run-android",
@@ -12,6 +12,9 @@
     "android:metro-connect": "bash scripts/android-metro-connect.sh",
     "android:reverse": "adb reverse tcp:8081 tcp:8081",
     "android:fix-mipmap": "bash scripts/fix-android-mipmap-dupes.sh",
+    "android:nuke-cxx": "bash scripts/android-nuke-cxx.sh",
+    "fix:android-dupes": "bash scripts/android-remove-finder-dupes-in-build.sh",
+    "fix:mipmap": "bash scripts/fix-android-mipmap-dupes.sh",
     "start:lan": "react-native start --host 0.0.0.0",
     "start:reset": "react-native start --host 0.0.0.0 --reset-cache",
     "ios": "react-native run-ios",
