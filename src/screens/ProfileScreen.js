@@ -9,7 +9,6 @@ import {
   Platform,
   StatusBar,
   Image,
-  Dimensions,
   FlatList,
   RefreshControl,
   Alert,
@@ -20,12 +19,14 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../contexts/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
-import { getUserPhotos, getPublicProfile, clearProfileCache } from '../services/publicProfile';
+import {
+  getUserPublicProfilePhotosPage,
+  getPublicProfile,
+  clearProfileCache,
+} from '../services/publicProfile';
+import { PHOTO_TYPES } from '../services/interactions';
 import { useTheme } from '../contexts/ThemeContext';
 import OptimizedImage from '../components/OptimizedImage';
-
-const { width } = Dimensions.get('window');
-const GRID_SIZE = (width - 60) / 3; // 3 columns with margins
 
 const createStyles = (colors) =>
   StyleSheet.create({
@@ -159,6 +160,14 @@ const createStyles = (colors) =>
       paddingTop: 16,
       paddingBottom: 12,
     },
+    sectionSubtext: {
+      fontSize: 13,
+      lineHeight: 18,
+      color: colors.textSecondary,
+      paddingHorizontal: 20,
+      marginTop: -8,
+      paddingBottom: 12,
+    },
     settingItem: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -227,40 +236,49 @@ const createStyles = (colors) =>
       fontSize: 14,
       color: colors.textSecondary,
     },
-    photosGrid: {
+    photosPreviewRow: {
       flexDirection: 'row',
-      flexWrap: 'wrap',
-      padding: 10,
-      justifyContent: 'flex-start',
+      paddingHorizontal: 20,
+      gap: 10,
+      paddingBottom: 4,
     },
-    photoGridItem: {
-      width: GRID_SIZE,
-      height: GRID_SIZE,
-      margin: 5,
+    photoPreviewCell: {
+      flex: 1,
+      aspectRatio: 1,
       borderRadius: 8,
       overflow: 'hidden',
       backgroundColor: colors.inputBackground,
     },
-    photoGridImage: {
+    photoPreviewImage: {
       width: '100%',
       height: '100%',
     },
-    morePhotosOverlay: {
-      width: '100%',
-      height: '100%',
-      backgroundColor: colors.inputBackground,
-      justifyContent: 'center',
+    seeAllPhotosRow: {
+      flexDirection: 'row',
       alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 14,
+      paddingHorizontal: 20,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.inputBorder,
     },
-    morePhotosText: {
-      fontSize: 20,
-      fontWeight: 'bold',
+    seeAllPhotosText: {
+      fontSize: 16,
+      fontWeight: '600',
       color: colors.primary,
-      marginBottom: 4,
+      marginRight: 4,
     },
-    morePhotosLabel: {
-      fontSize: 12,
-      color: colors.textSecondary,
+    profilePhotosCta: {
+      marginTop: 16,
+      paddingVertical: 12,
+      paddingHorizontal: 20,
+      borderRadius: 10,
+      backgroundColor: colors.navBackground,
+    },
+    profilePhotosCtaText: {
+      fontSize: 15,
+      fontWeight: '600',
+      color: colors.textWhite,
     },
   });
 
@@ -270,10 +288,10 @@ const ProfileScreen = ({ navigation }) => {
   const { colors, setDarkMode, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
-  const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
   const [userProfile, setUserProfile] = useState(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
-  const [userPhotos, setUserPhotos] = useState([]);
+  const [publicProfilePreviewPhotos, setPublicProfilePreviewPhotos] = useState([]);
+  const [hasMorePublicProfilePhotos, setHasMorePublicProfilePhotos] = useState(false);
   const [loadingPhotos, setLoadingPhotos] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState({ rolls_created: 0, photos_taken: 0, followers_count: 0 });
@@ -338,10 +356,35 @@ const ProfileScreen = ({ navigation }) => {
     fetchProfilePrivacy();
   }, [user?.id]);
 
+  const loadPublicProfilePreview = useCallback(async () => {
+    if (!user?.id) {
+      setLoadingPhotos(false);
+      setPublicProfilePreviewPhotos([]);
+      setHasMorePublicProfilePhotos(false);
+      return;
+    }
+    try {
+      setLoadingPhotos(true);
+      const { photos, hasMore } = await getUserPublicProfilePhotosPage(user.id, {
+        limit: 2,
+        offset: 0,
+      });
+      setPublicProfilePreviewPhotos(photos);
+      setHasMorePublicProfilePhotos(hasMore);
+    } catch (error) {
+      console.error('Error fetching public profile photos preview:', error);
+      setPublicProfilePreviewPhotos([]);
+      setHasMorePublicProfilePhotos(false);
+    } finally {
+      setLoadingPhotos(false);
+    }
+  }, [user?.id]);
+
   useFocusEffect(
     useCallback(() => {
       refreshProfile();
-    }, [refreshProfile])
+      loadPublicProfilePreview();
+    }, [refreshProfile, loadPublicProfilePreview])
   );
 
   // Merge AuthContext profile (fast path after login) with stats fetch
@@ -356,39 +399,11 @@ const ProfileScreen = ({ navigation }) => {
     }));
   }, [authProfile, user?.email]);
 
-  // Fetch user photos
-  const fetchUserPhotos = async () => {
-    if (!user?.id) {
-      setLoadingPhotos(false);
-      return;
-    }
-
-    try {
-      setLoadingPhotos(true);
-      const photos = await getUserPhotos(user.id);
-      // Ensure photos is an array
-      setUserPhotos(Array.isArray(photos) ? photos : []);
-    } catch (error) {
-      console.error('Error fetching user photos:', error);
-      setUserPhotos([]);
-    } finally {
-      setLoadingPhotos(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchUserPhotos();
-  }, [user?.id]);
-
   // Pull to refresh handler
   const onRefresh = async () => {
     setRefreshing(true);
     try {
-      await Promise.all([
-        refreshProfile(),
-        fetchUserProfile(),
-        fetchUserPhotos(),
-      ]);
+      await Promise.all([refreshProfile(), fetchUserProfile(), loadPublicProfilePreview()]);
     } catch (error) {
       console.error('Error refreshing profile:', error);
     } finally {
@@ -597,7 +612,7 @@ const ProfileScreen = ({ navigation }) => {
           <SettingItem
             icon="shield-checkmark-outline"
             label="Privacy Settings"
-            onPress={() => console.log('Privacy Settings')}
+            onPress={() => navigation?.navigate('PrivacySettings')}
           />
           <View style={styles.settingItem}>
             <View style={styles.settingItemLeft}>
@@ -667,51 +682,74 @@ const ProfileScreen = ({ navigation }) => {
           />
         </View>
 
-        {/* My Photos Section */}
+        {/* Public profile photos: grid uploads on your profile; prints monetization planned */}
         <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>My Photos</Text>
+          <Text style={styles.sectionTitle}>Public profile photos</Text>
+          <Text style={styles.sectionSubtext}>
+            Photos you add to your public profile grid. Open View Public Profile to upload new ones.
+            Optional print sales for your audience—coming soon.
+          </Text>
           {loadingPhotos ? (
             <View style={styles.photosLoading}>
-              <Text style={styles.loadingText}>Loading photos...</Text>
+              <Text style={styles.loadingText}>Loading profile photos...</Text>
             </View>
-          ) : userPhotos.length === 0 ? (
+          ) : publicProfilePreviewPhotos.length === 0 ? (
             <View style={styles.emptyPhotos}>
               <Ionicons name="images-outline" size={48} color={colors.textSecondary} />
-              <Text style={styles.emptyPhotosText}>No photos yet</Text>
-              <Text style={styles.emptyPhotosSubtext}>Start taking photos to see them here</Text>
+              <Text style={styles.emptyPhotosText}>No profile photos yet</Text>
+              <Text style={styles.emptyPhotosSubtext}>
+                Posts here are what followers see on your public profile—not every shot from your
+                rolls.
+              </Text>
+              <TouchableOpacity
+                style={styles.profilePhotosCta}
+                onPress={() =>
+                  navigation.navigate('PublicProfile', { userId: user?.id })
+                }
+                activeOpacity={0.8}
+              >
+                <Text style={styles.profilePhotosCtaText}>View public profile to add photos</Text>
+              </TouchableOpacity>
             </View>
           ) : (
-            <View style={styles.photosGrid}>
-              {userPhotos.slice(0, 9).map((photo) => (
+            <View>
+              <View style={styles.photosPreviewRow}>
+                {publicProfilePreviewPhotos.map((photo) => (
+                  <TouchableOpacity
+                    key={photo.id}
+                    style={styles.photoPreviewCell}
+                    onPress={() =>
+                      navigation.navigate('PhotoViewer', {
+                        photoId: photo.id,
+                        photoType: PHOTO_TYPES.PROFILE_PHOTO,
+                        userId: user.id,
+                        initialIndex: publicProfilePreviewPhotos.findIndex(
+                          (p) => p.id === photo.id
+                        ),
+                      })
+                    }
+                    activeOpacity={0.9}
+                  >
+                    <OptimizedImage
+                      source={{ uri: photo.image_url }}
+                      style={styles.photoPreviewImage}
+                      resizeMode="cover"
+                    />
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {hasMorePublicProfilePhotos ? (
                 <TouchableOpacity
-                  key={photo.id}
-                  style={styles.photoGridItem}
-                  onPress={() => {
-                    // TODO: Navigate to photo detail or roll
-                    console.log('Photo tapped:', photo.id);
-                  }}
+                  style={styles.seeAllPhotosRow}
+                  onPress={() =>
+                    navigation.navigate('MyPublicProfilePhotos', { userId: user.id })
+                  }
+                  activeOpacity={0.7}
                 >
-                  <OptimizedImage
-                    source={{ uri: photo.image_url }}
-                    style={styles.photoGridImage}
-                    resizeMode="cover"
-                  />
+                  <Text style={styles.seeAllPhotosText}>See all profile photos</Text>
+                  <Ionicons name="chevron-forward" size={22} color={colors.primary} />
                 </TouchableOpacity>
-              ))}
-              {userPhotos.length > 9 && (
-                <TouchableOpacity
-                  style={styles.photoGridItem}
-                  onPress={() => {
-                    // TODO: Navigate to all photos view
-                    console.log('View all photos');
-                  }}
-                >
-                  <View style={styles.morePhotosOverlay}>
-                    <Text style={styles.morePhotosText}>+{userPhotos.length - 9}</Text>
-                    <Text style={styles.morePhotosLabel}>More</Text>
-                  </View>
-                </TouchableOpacity>
-              )}
+              ) : null}
             </View>
           )}
         </View>
@@ -720,27 +758,20 @@ const ProfileScreen = ({ navigation }) => {
         <View style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>Preferences</Text>
           <SettingItem
-            icon="camera-outline"
-            label="Camera Quality"
-            onPress={() => console.log('Camera Quality')}
+            icon="location-outline"
+            label="Shipping addresses"
+            onPress={() => navigation.navigate('ShippingAddresses')}
           />
-          <View style={styles.settingItem}>
-            <View style={styles.settingItemLeft}>
-              <Ionicons
-                name="images-outline"
-                size={20}
-                color={colors.textPrimary}
-                style={styles.settingIcon}
-              />
-              <Text style={styles.settingLabel}>Auto-save to Photos</Text>
-            </View>
-            <Switch
-              value={autoSaveEnabled}
-              onValueChange={setAutoSaveEnabled}
-              trackColor={{ false: colors.inputBorder, true: colors.primary }}
-              thumbColor={colors.textWhite}
-            />
-          </View>
+          <SettingItem
+            icon="map-outline"
+            label="Location"
+            onPress={() => navigation.navigate('UserLocation')}
+          />
+          <SettingItem
+            icon="card-outline"
+            label="Payment / subscription"
+            onPress={() => navigation.navigate('PaymentSubscription')}
+          />
           <View style={styles.settingItem}>
             <View style={styles.settingItemLeft}>
               <Ionicons
@@ -767,6 +798,11 @@ const ProfileScreen = ({ navigation }) => {
             icon="help-circle-outline"
             label="Help & FAQ"
             onPress={() => navigation.navigate('HelpCenter')}
+          />
+          <SettingItem
+            icon="document-text-outline"
+            label="Data policy"
+            onPress={() => navigation.navigate('DataPolicy')}
           />
           <SettingItem
             icon="mail-outline"

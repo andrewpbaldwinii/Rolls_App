@@ -81,6 +81,7 @@ const PublicProfileScreen = ({ route, navigation }) => {
   const [feedItemComments, setFeedItemComments] = useState(new Map());
   const [feedLoadingComments, setFeedLoadingComments] = useState(new Map());
   const [refreshingFeed, setRefreshingFeed] = useState(false);
+  const [profileUnavailable, setProfileUnavailable] = useState(false);
 
   // useCallback hook - must be called after all useState hooks
   const loadProfileData = useCallback(async () => {
@@ -93,7 +94,8 @@ const PublicProfileScreen = ({ route, navigation }) => {
 
     try {
       setLoading(true);
-      
+      setProfileUnavailable(false);
+
       // OPTIMIZED: Get current user once and reuse
       const { data: { user: currentAuthUser } } = await supabase.auth.getUser();
       const currentUserId = currentAuthUser?.id || null;
@@ -101,7 +103,17 @@ const PublicProfileScreen = ({ route, navigation }) => {
       // Load profile first (most critical) - now includes profile_is_public
       let profileData;
       try {
-        profileData = await getPublicProfile(userId);
+        const viewerForPrivacy = isOwnProfile ? null : currentUserId;
+        profileData = await getPublicProfile(userId, false, viewerForPrivacy);
+        if (profileData?.profileUnavailable) {
+          setProfileUnavailable(true);
+          setProfile(null);
+          setPublicRolls([]);
+          setPublicPhotos([]);
+          setFeedItems([]);
+          return;
+        }
+        setProfileUnavailable(false);
         if (!profileData) {
           throw new Error('Profile not found');
         }
@@ -586,7 +598,17 @@ const PublicProfileScreen = ({ route, navigation }) => {
         setFollowing(true);
       }
       // Reload stats
-      const profileData = await getPublicProfile(userId);
+      const profileData = await getPublicProfile(
+        userId,
+        true,
+        isOwnProfile ? null : currentUser?.id
+      );
+      if (profileData?.profileUnavailable) {
+        setProfileUnavailable(true);
+        setProfile(null);
+        return;
+      }
+      setProfileUnavailable(false);
       setProfile(profileData);
     } catch (err) {
       console.error('Error toggling follow:', err);
@@ -955,6 +977,33 @@ const PublicProfileScreen = ({ route, navigation }) => {
     );
   }
 
+  if (profileUnavailable) {
+    return (
+      <View style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor={colors.navBackground} />
+        <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
+          {navigation && (
+            <TouchableOpacity
+              onPress={() => navigation.goBack()}
+              style={styles.backButton}
+            >
+              <Ionicons name="arrow-back" size={24} color={colors.textWhite} />
+            </TouchableOpacity>
+          )}
+          <Text style={styles.headerTitle}>Profile</Text>
+          <View style={styles.headerRight} />
+        </View>
+        <View style={styles.errorContainer}>
+          <Ionicons name="eye-off-outline" size={64} color={colors.textSecondary} />
+          <Text style={styles.errorText}>Profile unavailable</Text>
+          <Text style={styles.errorSubtext}>
+            You cannot view this profile. The owner may have restricted who can see it.
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
   if (!profile) {
     return (
       <View style={styles.container}>
@@ -1248,6 +1297,13 @@ const createStyles = (colors) => StyleSheet.create({
     marginTop: 16,
     fontSize: 18,
     color: colors.error,
+  },
+  errorSubtext: {
+    marginTop: 12,
+    fontSize: 15,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 22,
   },
   lockedProfileContainer: {
     flex: 1,

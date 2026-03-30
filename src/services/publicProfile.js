@@ -21,18 +21,40 @@ const cleanupProfileCache = () => {
  * Get public profile data for a user
  * @param {string} userId - User ID
  * @param {boolean} forceRefresh - Force refresh even if cached
- * @returns {Promise<Object>} Profile data with stats
+ * @param {string|null} viewerId - When set (another user viewing), hides profile if owner blocked viewer
+ * @returns {Promise<Object>} Profile data with stats, or { profileUnavailable: true } when blocked
  */
-export const getPublicProfile = async (userId, forceRefresh = false) => {
+export const getPublicProfile = async (userId, forceRefresh = false, viewerId = null) => {
+  const cacheKey =
+    viewerId && viewerId !== userId ? `${userId}:${viewerId}` : userId;
+
   // Check cache first
   if (!forceRefresh) {
     cleanupProfileCache();
-    const cached = profileCache.get(userId);
+    const cached = profileCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.data;
     }
   }
   try {
+    if (viewerId && viewerId !== userId) {
+      const { data: blockRow, error: blockError } = await supabase
+        .from('user_blocks')
+        .select('id')
+        .eq('blocker_id', userId)
+        .eq('blocked_id', viewerId)
+        .maybeSingle();
+
+      if (!blockError && blockRow) {
+        const unavailable = { profileUnavailable: true };
+        profileCache.set(cacheKey, {
+          data: unavailable,
+          expiresAt: Date.now() + CACHE_DURATION,
+        });
+        return unavailable;
+      }
+    }
+
     // OPTIMIZED: Get profile with email in one query (try with email, fallback without)
     let profileQuery = supabase
       .from('users')
@@ -40,8 +62,9 @@ export const getPublicProfile = async (userId, forceRefresh = false) => {
       .eq('id', userId)
       .single();
 
-    const { data: profile, error: profileError } = await profileQuery;
+    const { data: profileFirst, error: profileError } = await profileQuery;
 
+    let profile;
     // If email column doesn't exist, try without it
     if (profileError && profileError.code === 'PGRST116') {
       profileQuery = supabase
@@ -49,7 +72,7 @@ export const getPublicProfile = async (userId, forceRefresh = false) => {
         .select('id, username, display_name, avatar_url, bio, profile_is_public')
         .eq('id', userId)
         .single();
-      
+
       const { data: profileData, error: profileError2 } = await profileQuery;
       if (profileError2) {
         console.error('Error fetching user profile:', profileError2);
@@ -59,6 +82,8 @@ export const getPublicProfile = async (userId, forceRefresh = false) => {
     } else if (profileError) {
       console.error('Error fetching user profile:', profileError);
       throw profileError;
+    } else {
+      profile = profileFirst;
     }
 
     if (!profile) {
@@ -156,7 +181,7 @@ export const getPublicProfile = async (userId, forceRefresh = false) => {
     };
 
     // Cache the result
-    profileCache.set(userId, {
+    profileCache.set(cacheKey, {
       data: profileData,
       expiresAt: Date.now() + CACHE_DURATION,
     });
@@ -486,6 +511,63 @@ export const getUserPhotos = async (userId) => {
     // Return empty array instead of throwing to prevent UI crashes
     return [];
   }
+};
+
+/** Default page size for full profile photo gallery (scroll pagination). */
+export const PUBLIC_PROFILE_PHOTOS_PAGE_SIZE = 18;
+
+/**
+ * Paginated standalone photos on the user's public profile grid (public_profile_photos).
+ * Newest first. Fetches `limit + 1` rows to detect `hasMore`.
+ * @param {string} userId
+ * @param {{ limit?: number, offset?: number }} page
+ * @returns {Promise<{ photos: Array<{ id, image_url, caption, created_at }>, hasMore: boolean }>}
+ */
+export const getUserPublicProfilePhotosPage = async (
+  userId,
+  { limit = PUBLIC_PROFILE_PHOTOS_PAGE_SIZE, offset = 0 } = {}
+) => {
+  if (!userId) {
+    return { photos: [], hasMore: false };
+  }
+  try {
+    const fetchCount = limit + 1;
+    const rangeEnd = offset + fetchCount - 1;
+    const { data, error } = await supabase
+      .from('public_profile_photos')
+      .select('id, image_url, caption, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .range(offset, rangeEnd);
+
+    if (error) {
+      if (error.code === 'PGRST205' || error.message?.includes('not found')) {
+        return { photos: [], hasMore: false };
+      }
+      throw error;
+    }
+    const rows = data || [];
+    const hasMore = rows.length > limit;
+    const photos = rows.slice(0, limit);
+    return { photos, hasMore };
+  } catch (error) {
+    console.error('Error fetching public profile photos page:', error);
+    return { photos: [], hasMore: false };
+  }
+};
+
+/**
+ * Standalone photos on the user's public profile grid (public_profile_photos table).
+ * Newest first. First page only (up to 50) — prefer getUserPublicProfilePhotosPage for pagination.
+ * @param {string} userId
+ * @returns {Promise<Array<{ id, image_url, caption, created_at }>>}
+ */
+export const getUserPublicProfilePhotos = async (userId) => {
+  const { photos } = await getUserPublicProfilePhotosPage(userId, {
+    limit: 50,
+    offset: 0,
+  });
+  return photos;
 };
 
 /**

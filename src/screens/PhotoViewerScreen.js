@@ -21,6 +21,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../contexts/AuthContext';
 import { getPublicPhotos } from '../services/publicProfile';
+import { getRollGalleryPhotos } from '../services/rollGallery';
 import {
   likePhoto,
   unlikePhoto,
@@ -44,7 +45,14 @@ const PhotoViewerScreen = () => {
   const route = useRoute();
   const { user } = useAuth();
   
-  const { photoId, photoType, userId, initialIndex = 0, showComments = false } = route.params || {};
+  const {
+    photoId,
+    photoType,
+    userId,
+    rollId,
+    initialIndex = 0,
+    showComments = false,
+  } = route.params || {};
   
   const [photos, setPhotos] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
@@ -63,10 +71,61 @@ const PhotoViewerScreen = () => {
 
   const currentPhoto = photos[currentIndex];
 
-  // Load photos for this user
+  const loadPhotos = useCallback(async () => {
+    const isRollGallery = photoType === PHOTO_TYPES.ROLL_IMAGE && rollId;
+
+    if (!isRollGallery && !userId) {
+      setPhotos([]);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      if (isRollGallery) {
+        const rows = await getRollGalleryPhotos(rollId, user?.id || null);
+        const normalized = rows.map((r) => ({
+          id: r.id,
+          image_url: r.imageUrl,
+          caption: r.caption || '',
+          created_at: r.createdAt,
+        }));
+        setPhotos(normalized);
+        if (photoId) {
+          const index = normalized.findIndex((p) => p.id === photoId);
+          if (index >= 0) setCurrentIndex(index);
+        } else if (
+          typeof initialIndex === 'number' &&
+          initialIndex >= 0 &&
+          initialIndex < normalized.length
+        ) {
+          setCurrentIndex(initialIndex);
+        } else {
+          setCurrentIndex(0);
+        }
+      } else {
+        const userPhotos = await getPublicPhotos(userId);
+        setPhotos(userPhotos || []);
+
+        if (photoId) {
+          const index = userPhotos.findIndex((p) => p.id === photoId);
+          if (index >= 0) {
+            setCurrentIndex(index);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error loading photos:', error);
+      Alert.alert('Error', 'Failed to load photos');
+    } finally {
+      setLoading(false);
+    }
+  }, [userId, rollId, photoType, photoId, initialIndex, user?.id]);
+
+  // Load photos for public profile gallery or roll contributor gallery
   useEffect(() => {
     loadPhotos();
-  }, [userId]);
+  }, [loadPhotos]);
 
   // Load interactions for current photo
   useEffect(() => {
@@ -96,32 +155,6 @@ const PhotoViewerScreen = () => {
       keyboardWillHide.remove();
     };
   }, []);
-
-  const loadPhotos = async () => {
-    if (!userId) {
-      setLoading(false);
-      return;
-    }
-
-    try {
-      setLoading(true);
-      const userPhotos = await getPublicPhotos(userId);
-      setPhotos(userPhotos || []);
-      
-      // Find initial photo index if photoId provided
-      if (photoId) {
-        const index = userPhotos.findIndex(p => p.id === photoId);
-        if (index >= 0) {
-          setCurrentIndex(index);
-        }
-      }
-    } catch (error) {
-      console.error('Error loading photos:', error);
-      Alert.alert('Error', 'Failed to load photos');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const loadPhotoInteractions = async () => {
     if (!currentPhoto || !user) return;

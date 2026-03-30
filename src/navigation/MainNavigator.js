@@ -20,6 +20,12 @@ import AllRollsScreen from '../screens/AllRollsScreen';
 import HelpCenterScreen from '../screens/HelpCenterScreen';
 import HelpArticleScreen from '../screens/HelpArticleScreen';
 import AboutRollsScreen from '../screens/AboutRollsScreen';
+import PrivacySettingsScreen from '../screens/PrivacySettingsScreen';
+import DataPolicyScreen from '../screens/DataPolicyScreen';
+import ShippingAddressesScreen from '../screens/ShippingAddressesScreen';
+import PaymentSubscriptionScreen from '../screens/PaymentSubscriptionScreen';
+import MyPublicProfilePhotosScreen from '../screens/MyPublicProfilePhotosScreen';
+import UserLocationScreen from '../screens/UserLocationScreen';
 import CameraButton from '../components/CameraButton';
 import { useNotificationCounts } from '../contexts/NotificationCountsContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -213,6 +219,48 @@ const MainNavigator = () => {
       <Stack.Screen
         name="EditProfile"
         component={EditProfileScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="PrivacySettings"
+        component={PrivacySettingsScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="DataPolicy"
+        component={DataPolicyScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="ShippingAddresses"
+        component={ShippingAddressesScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="PaymentSubscription"
+        component={PaymentSubscriptionScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="MyPublicProfilePhotos"
+        component={MyPublicProfilePhotosScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="UserLocation"
+        component={UserLocationScreen}
         options={{
           presentation: 'card',
         }}
