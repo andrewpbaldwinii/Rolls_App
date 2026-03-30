@@ -26,6 +26,8 @@ import ShippingAddressesScreen from '../screens/ShippingAddressesScreen';
 import PaymentSubscriptionScreen from '../screens/PaymentSubscriptionScreen';
 import MyPublicProfilePhotosScreen from '../screens/MyPublicProfilePhotosScreen';
 import UserLocationScreen from '../screens/UserLocationScreen';
+import PrintOrdersScreen from '../screens/PrintOrdersScreen';
+import RollPrintOrderScreen from '../screens/RollPrintOrderScreen';
 import CameraButton from '../components/CameraButton';
 import { useNotificationCounts } from '../contexts/NotificationCountsContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -261,6 +263,20 @@ const MainNavigator = () => {
       <Stack.Screen
         name="UserLocation"
         component={UserLocationScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="PrintOrders"
+        component={PrintOrdersScreen}
+        options={{
+          presentation: 'card',
+        }}
+      />
+      <Stack.Screen
+        name="RollPrintOrder"
+        component={RollPrintOrderScreen}
         options={{
           presentation: 'card',
         }}

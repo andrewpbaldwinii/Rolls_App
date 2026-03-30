@@ -268,6 +268,16 @@ const createStyles = (colors) =>
       color: colors.primary,
       marginRight: 4,
     },
+    rollNestedSectionTitle: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.textSecondary,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      paddingHorizontal: 20,
+      paddingTop: 10,
+      paddingBottom: 6,
+    },
     profilePhotosCta: {
       marginTop: 16,
       paddingVertical: 12,
@@ -679,6 +689,12 @@ const ProfileScreen = ({ navigation }) => {
             icon="archive-outline"
             label="Archived Rolls"
             onPress={() => console.log('Archived Rolls')}
+          />
+          <Text style={styles.rollNestedSectionTitle}>Orders</Text>
+          <SettingItem
+            icon="print-outline"
+            label="Print orders"
+            onPress={() => navigation.navigate('PrintOrders')}
           />
         </View>
 

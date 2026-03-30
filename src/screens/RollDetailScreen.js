@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -71,7 +71,10 @@ const RollDetailScreen = () => {
   const [acceptingInvite, setAcceptingInvite] = useState(false);
   const [visibleImageIndices, setVisibleImageIndices] = useState(new Set([0, 1, 2, 3, 4, 5])); // Only load first 6 images initially
   const [showAllImages, setShowAllImages] = useState(false); // Pagination state for grid view
-  
+  const [printSelecting, setPrintSelecting] = useState(false);
+  const [printSelectedIds, setPrintSelectedIds] = useState(() => new Set());
+  const printSelectingRef = useRef(false);
+
   // Feed view state for roll images
   const [feedItems, setFeedItems] = useState([]);
   const [feedInteractions, setFeedInteractions] = useState(new Map()); // Map of imageId -> { liked, likeCount, commentCount }
@@ -99,6 +102,14 @@ const RollDetailScreen = () => {
     if (roll?.is_public) return true;
     return false;
   }, [isOwner, isContributor, roll?.is_public]);
+
+  const canPrintRoll = useMemo(() => {
+    return !!user && (isOwner || isContributor) && !isLocked && images.length > 0;
+  }, [user, isOwner, isContributor, isLocked, images.length]);
+
+  useEffect(() => {
+    printSelectingRef.current = printSelecting;
+  }, [printSelecting]);
 
   const fetchData = useCallback(async () => {
     if (!rollId) {
@@ -267,10 +278,15 @@ const RollDetailScreen = () => {
 
       // Set images (empty array is fine - roll might not have images yet)
       setImages(imageData || []);
-      // Reset visible images to first 6 when images change
-      setVisibleImageIndices(new Set([0, 1, 2, 3, 4, 5]));
-      // Reset pagination state when images change
-      setShowAllImages(false);
+      const list = imageData || [];
+      if (printSelectingRef.current && list.length > 0) {
+        setVisibleImageIndices(new Set(list.map((_, index) => index)));
+        setShowAllImages(true);
+        setPrintSelectedIds(new Set(list.map((img) => img.id)));
+      } else {
+        setVisibleImageIndices(new Set([0, 1, 2, 3, 4, 5]));
+        setShowAllImages(false);
+      }
 
       const canViewFeed =
         viewerIsOwner || userIsContributor || rollRecord?.is_public;
@@ -699,6 +715,53 @@ const RollDetailScreen = () => {
     }
   };
 
+  useEffect(() => {
+    if (printSelecting && !canPrintRoll) {
+      setPrintSelecting(false);
+      setPrintSelectedIds(new Set());
+    }
+  }, [printSelecting, canPrintRoll]);
+
+  const startPrintMode = useCallback(() => {
+    if (!canPrintRoll) return;
+    setPrintSelecting(true);
+    setShowAllImages(true);
+    setVisibleImageIndices(new Set(images.map((_, index) => index)));
+    setPrintSelectedIds(new Set(images.map((img) => img.id)));
+  }, [canPrintRoll, images]);
+
+  const exitPrintMode = useCallback(() => {
+    setPrintSelecting(false);
+    setPrintSelectedIds(new Set());
+  }, []);
+
+  const togglePrintSelect = useCallback((imageId) => {
+    setPrintSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(imageId)) next.delete(imageId);
+      else next.add(imageId);
+      return next;
+    });
+  }, []);
+
+  const goToPrintOrder = useCallback(() => {
+    const selected = images.filter((img) => printSelectedIds.has(img.id));
+    if (selected.length === 0) {
+      Alert.alert('Select photos', 'Choose at least one photo to print.');
+      return;
+    }
+    exitPrintMode();
+    navigation.navigate('RollPrintOrder', {
+      rollId,
+      rollTitle: roll?.title,
+      selectedPhotos: selected.map((img) => ({
+        id: img.id,
+        imageUrl: img.image_url,
+        caption: img.caption,
+      })),
+    });
+  }, [images, printSelectedIds, navigation, rollId, roll?.title, exitPrintMode]);
+
   const renderImageItem = ({ item, index }) => {
     const isLastInRow = (index + 1) % GRID_COLUMNS === 0;
     const shouldLoadImage = visibleImageIndices.has(index);
@@ -722,58 +785,87 @@ const RollDetailScreen = () => {
       );
     }
 
+    const selected = printSelectedIds.has(item.id);
+    const showPrintChrome = printSelecting && !isLocked;
+
+    const imageBody = shouldLoadImage ? (
+      <View style={styles.imageContainer}>
+        <OptimizedImage
+          source={{
+            uri: item.image_url,
+            width: IMAGE_SIZE,
+            height: IMAGE_SIZE,
+          }}
+          style={styles.image}
+          resizeMethod="resize"
+          resizeMode="cover"
+          onError={(error) => {
+            const errorDetails = error.nativeEvent || error;
+            console.error('❌ Image load error for roll image:', {
+              imageId: item.id,
+              imageUrl: item.image_url,
+              error: errorDetails?.error || errorDetails?.message || errorDetails,
+            });
+            setVisibleImageIndices(prev => {
+              const next = new Set(prev);
+              next.delete(index);
+              return next;
+            });
+          }}
+          onLoad={() => {
+            console.log('✅ Roll image loaded successfully:', item.id);
+            const visibleArray = Array.from(visibleImageIndices);
+            if (visibleArray.length > 0) {
+              const maxVisible = Math.max(...visibleArray);
+              if (index === maxVisible && index < images.length - 1) {
+                setTimeout(() => {
+                  setVisibleImageIndices(prev => {
+                    const next = new Set(prev);
+                    const nextBatchSize = Math.min(3, images.length - index - 1);
+                    for (let i = 1; i <= nextBatchSize; i++) {
+                      next.add(index + i);
+                    }
+                    return next;
+                  });
+                }, 500);
+              }
+            }
+          }}
+        />
+      </View>
+    ) : (
+      <View style={styles.imageLoadingPlaceholder}>
+        <ActivityIndicator size="small" color={colors.textSecondary} />
+      </View>
+    );
+
+    if (showPrintChrome) {
+      return (
+        <TouchableOpacity
+          style={wrapperStyle}
+          activeOpacity={0.88}
+          onPress={() => togglePrintSelect(item.id)}
+        >
+          {imageBody}
+          <View style={styles.printSelectBadge} pointerEvents="none">
+            <View
+              style={[
+                styles.printSelectCircle,
+                selected && styles.printSelectCircleOn,
+              ]}
+            >
+              {selected ? (
+                <Ionicons name="checkmark" size={18} color={colors.buttonText} />
+              ) : null}
+            </View>
+          </View>
+        </TouchableOpacity>
+      );
+    }
+
     return (
       <View style={wrapperStyle}>
-        {shouldLoadImage ? (
-          <View style={styles.imageContainer}>
-            <OptimizedImage
-              source={{
-                uri: item.image_url,
-                width: IMAGE_SIZE,
-                height: IMAGE_SIZE,
-              }}
-              style={styles.image}
-              resizeMethod="resize"
-              resizeMode="cover"
-              onError={(error) => {
-                const errorDetails = error.nativeEvent || error;
-                console.error('❌ Image load error for roll image:', {
-                  imageId: item.id,
-                  imageUrl: item.image_url,
-                  error: errorDetails?.error || errorDetails?.message || errorDetails,
-                });
-                setVisibleImageIndices(prev => {
-                  const next = new Set(prev);
-                  next.delete(index);
-                  return next;
-                });
-              }}
-              onLoad={() => {
-                console.log('✅ Roll image loaded successfully:', item.id);
-                const visibleArray = Array.from(visibleImageIndices);
-                if (visibleArray.length > 0) {
-                  const maxVisible = Math.max(...visibleArray);
-                  if (index === maxVisible && index < images.length - 1) {
-                    setTimeout(() => {
-                      setVisibleImageIndices(prev => {
-                        const next = new Set(prev);
-                        const nextBatchSize = Math.min(3, images.length - index - 1);
-                        for (let i = 1; i <= nextBatchSize; i++) {
-                          next.add(index + i);
-                        }
-                        return next;
-                      });
-                    }, 500);
-                  }
-                }
-              }}
-            />
-          </View>
-        ) : (
-          <View style={styles.imageLoadingPlaceholder}>
-            <ActivityIndicator size="small" color={colors.textSecondary} />
-          </View>
-        )}
+        {imageBody}
       </View>
     );
   };
@@ -996,6 +1088,23 @@ const RollDetailScreen = () => {
             <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
           </TouchableOpacity>
         )}
+
+        {canPrintRoll && (
+          <TouchableOpacity
+            style={[styles.printEntryButton, printSelecting && styles.printEntryButtonActive]}
+            onPress={printSelecting ? exitPrintMode : startPrintMode}
+          >
+            <Ionicons name="print-outline" size={20} color={colors.buttonPrimary} />
+            <Text style={styles.printEntryButtonText}>
+              {printSelecting ? 'Cancel print selection' : 'Print'}
+            </Text>
+            <Ionicons
+              name={printSelecting ? 'close-circle-outline' : 'chevron-forward'}
+              size={20}
+              color={colors.textSecondary}
+            />
+          </TouchableOpacity>
+        )}
       </View>
 
       <View style={styles.galleryHeader}>
@@ -1020,6 +1129,26 @@ const RollDetailScreen = () => {
           </View>
         ) : (
           <>
+            {printSelecting && canPrintRoll && (
+              <View style={styles.printPhotosToolbar}>
+                <TouchableOpacity onPress={exitPrintMode} style={styles.printToolbarCancel}>
+                  <Text style={styles.printToolbarCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.printSelectedCta,
+                    printSelectedIds.size === 0 && styles.printSelectedCtaDisabled,
+                  ]}
+                  onPress={goToPrintOrder}
+                  disabled={printSelectedIds.size === 0}
+                >
+                  <Ionicons name="print-outline" size={18} color={colors.buttonText} />
+                  <Text style={styles.printSelectedCtaText}>
+                    Print Selected ({printSelectedIds.size})
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
             <FlatList
               data={showAllImages ? images : images.slice(0, 6)}
               keyExtractor={(item) => item.id.toString()}
@@ -1028,14 +1157,18 @@ const RollDetailScreen = () => {
               columnWrapperStyle={styles.columnWrapper}
               scrollEnabled={false}
               contentContainerStyle={styles.grid}
-              // Aggressive memory optimization for large images
+              extraData={{
+                printSelecting,
+                sel: printSelectedIds.size,
+                sig: [...printSelectedIds].join(','),
+              }}
               removeClippedSubviews={true}
-              maxToRenderPerBatch={3} // Only render 3 at a time
+              maxToRenderPerBatch={3}
               updateCellsBatchingPeriod={200}
-              initialNumToRender={6} // Start with 6
-              windowSize={2} // Very small window
+              initialNumToRender={6}
+              windowSize={2}
             />
-            {!showAllImages && images.length > 6 && (
+            {!printSelecting && !showAllImages && images.length > 6 && (
               <TouchableOpacity
                 style={styles.viewAllButton}
                 onPress={() => {
@@ -1436,6 +1569,62 @@ const createStyles = (colors) => StyleSheet.create({
     fontWeight: '600',
     color: colors.buttonPrimary,
   },
+  printPhotosToolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
+  printToolbarCancel: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  printToolbarCancelText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  printSelectedCta: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: colors.buttonPrimary,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
+  printSelectedCtaDisabled: {
+    opacity: 0.45,
+  },
+  printSelectedCtaText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.buttonText,
+  },
+  printEntryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.inputBackground,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    marginTop: 16,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
+  },
+  printEntryButtonActive: {
+    borderColor: colors.buttonPrimary,
+    backgroundColor: colors.inputBackground,
+  },
+  printEntryButtonText: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.buttonPrimary,
+  },
   inviteActionsContainer: {
     marginTop: 16,
     paddingTop: 16,
@@ -1572,6 +1761,27 @@ const createStyles = (colors) => StyleSheet.create({
     backgroundColor: colors.inputBackground,
     justifyContent: 'center',
     alignItems: 'center',
+    position: 'relative',
+  },
+  printSelectBadge: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    zIndex: 2,
+  },
+  printSelectCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 2,
+    borderColor: colors.background,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  printSelectCircleOn: {
+    backgroundColor: colors.buttonPrimary,
+    borderColor: colors.buttonPrimary,
   },
   imageContainer: {
     width: '100%',
