@@ -38,10 +38,11 @@ import { useTheme } from '../contexts/ThemeContext';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const ITEM_WIDTH = SCREEN_WIDTH;
 const IMAGE_HEIGHT = SCREEN_WIDTH; // Square images
+const ROLL_CARD_INSET = 16;
 
 const HomeScreen = () => {
   const { colors, isDark } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
@@ -70,12 +71,15 @@ const HomeScreen = () => {
     if (!user) return;
 
     try {
-      const photos = itemsToLoad.map(item => ({
-        id: item.id,
-        type: item.type === NEWSFEED_ITEM_TYPES.PROFILE_PHOTO 
-          ? PHOTO_TYPES.PROFILE_PHOTO 
-          : PHOTO_TYPES.ROLL_IMAGE,
-      }));
+      const photos = itemsToLoad
+        .filter((item) => item.type !== NEWSFEED_ITEM_TYPES.PUBLIC_ROLL)
+        .map((item) => ({
+          id: item.id,
+          type:
+            item.type === NEWSFEED_ITEM_TYPES.PROFILE_PHOTO
+              ? PHOTO_TYPES.PROFILE_PHOTO
+              : PHOTO_TYPES.ROLL_IMAGE,
+        }));
 
       const likeStatusMap = await getPhotosLikeStatus(photos, user.id);
 
@@ -94,9 +98,11 @@ const HomeScreen = () => {
           newMap.clear();
         }
         itemsToLoad.forEach((item) => {
-          const photoType = item.type === NEWSFEED_ITEM_TYPES.PROFILE_PHOTO 
-            ? PHOTO_TYPES.PROFILE_PHOTO 
-            : PHOTO_TYPES.ROLL_IMAGE;
+          if (item.type === NEWSFEED_ITEM_TYPES.PUBLIC_ROLL) return;
+          const photoType =
+            item.type === NEWSFEED_ITEM_TYPES.PROFILE_PHOTO
+              ? PHOTO_TYPES.PROFILE_PHOTO
+              : PHOTO_TYPES.ROLL_IMAGE;
           const likeStatus = likeStatusMap.get(item.id) || { liked: false, count: 0 };
           const commentCount = commentCounts.find(c => c.id === item.id)?.count || 0;
           
@@ -214,10 +220,9 @@ const HomeScreen = () => {
   }, [navigation]);
 
   const handleImagePress = useCallback((item) => {
-    if (item.type === NEWSFEED_ITEM_TYPES.ROLL_IMAGE && item.rollId) {
+    if (item.type === NEWSFEED_ITEM_TYPES.PUBLIC_ROLL && item.rollId) {
       navigation.navigate('RollDetail', { rollId: item.rollId });
     } else if (item.type === NEWSFEED_ITEM_TYPES.PROFILE_PHOTO) {
-      // Navigate to photo viewer for profile photos
       navigation.navigate('PhotoViewer', {
         photoId: item.id,
         photoType: PHOTO_TYPES.PROFILE_PHOTO,
@@ -411,32 +416,92 @@ const HomeScreen = () => {
               </View>
             )}
             <View style={styles.userText}>
-              <Text style={styles.username}>
-                {item.displayName || item.username || 'Unknown User'}
-              </Text>
-              {item.type === NEWSFEED_ITEM_TYPES.ROLL_IMAGE && item.rollTitle && (
-                <Text style={styles.rollTitle} numberOfLines={1}>
-                  {item.rollTitle}
+              {item.type === NEWSFEED_ITEM_TYPES.PUBLIC_ROLL ? (
+                <View style={styles.rollHeaderRow}>
+                  <Text
+                    style={[styles.username, styles.rollHeaderUsername]}
+                    numberOfLines={1}
+                  >
+                    {item.displayName || item.username || 'Unknown User'}
+                  </Text>
+                  <View style={styles.rollKindPill}>
+                    <Ionicons name="heart-outline" size={14} color={colors.primary} />
+                    <Text style={styles.rollKindPillText}>Shared roll</Text>
+                  </View>
+                </View>
+              ) : (
+                <Text style={styles.username}>
+                  {item.displayName || item.username || 'Unknown User'}
                 </Text>
               )}
             </View>
           </TouchableOpacity>
         </View>
 
-        {/* Image */}
-        <TouchableOpacity
-          activeOpacity={0.9}
-          onPress={() => handleImagePress(item)}
-        >
-          <Image
-            source={{ uri: item.imageUrl }}
-            style={styles.feedImage}
-            resizeMode="cover"
-            onError={(error) => {
-              console.error('Image load error:', error);
-            }}
-          />
-        </TouchableOpacity>
+        {item.type === NEWSFEED_ITEM_TYPES.PUBLIC_ROLL ? (
+          <TouchableOpacity
+            style={styles.rollCardTouchable}
+            activeOpacity={0.92}
+            onPress={() => handleImagePress(item)}
+            accessibilityRole="button"
+            accessibilityLabel={item.rollTitle ? `Open roll ${item.rollTitle}` : 'Open public roll'}
+          >
+            <View style={styles.rollCardFrame}>
+              <View style={styles.rollCardPhotoShell}>
+                <View style={styles.rollCardImageWrap}>
+                  {item.imageUrl ? (
+                    <Image
+                      source={{ uri: item.imageUrl }}
+                      style={styles.rollCardImage}
+                      resizeMode="cover"
+                      onError={(e) => console.error('Roll title image error:', e)}
+                    />
+                  ) : (
+                    <View style={[styles.rollCardImage, styles.rollCardImageFallback]} />
+                  )}
+                </View>
+                <View style={styles.rollCardScrim} pointerEvents="none" />
+              </View>
+              <View style={styles.rollCardPolaroidFooter} pointerEvents="none">
+                <View style={styles.rollCardOverlayRow}>
+                  <View style={styles.rollCardTextCol}>
+                    <Text style={styles.rollCardPolaroidTitle} numberOfLines={2}>
+                      {item.rollTitle || 'Untitled roll'}
+                    </Text>
+                    {item.createdAt ? (
+                      <Text style={styles.rollCardPolaroidMeta} numberOfLines={1}>
+                        {formatTimestamp(item.createdAt)}
+                      </Text>
+                    ) : null}
+                    {item.rollCaption ? (
+                      <Text style={styles.rollCardPolaroidCaption} numberOfLines={3}>
+                        {item.rollCaption}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <View style={styles.rollCardHintPill}>
+                    <Text style={styles.rollCardHint}>Take a look</Text>
+                    <Ionicons name="arrow-forward" size={18} color={colors.primary} />
+                  </View>
+                </View>
+              </View>
+            </View>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => handleImagePress(item)}
+          >
+            <Image
+              source={{ uri: item.imageUrl }}
+              style={styles.feedImage}
+              resizeMode="cover"
+              onError={(error) => {
+                console.error('Image load error:', error);
+              }}
+            />
+          </TouchableOpacity>
+        )}
 
         {/* Caption */}
         {item.caption && (
@@ -451,7 +516,8 @@ const HomeScreen = () => {
           </View>
         )}
 
-        {/* Like/Comment Actions */}
+        {/* Like/comment only for profile photos (public roll card uses synthetic id, not a photo row) */}
+        {item.type !== NEWSFEED_ITEM_TYPES.PUBLIC_ROLL && (
         <View style={styles.actionsContainer}>
           <TouchableOpacity
             style={styles.actionButton}
@@ -487,9 +553,10 @@ const HomeScreen = () => {
             )}
           </TouchableOpacity>
         </View>
+        )}
 
         {/* Comments Display */}
-        {itemComments.has(item.id) && itemComments.get(item.id).comments.length > 0 && (
+        {item.type !== NEWSFEED_ITEM_TYPES.PUBLIC_ROLL && itemComments.has(item.id) && itemComments.get(item.id).comments.length > 0 && (
           <View style={styles.commentsDisplayContainer}>
             {itemComments.get(item.id).comments.map((comment) => (
               <View key={comment.id} style={styles.commentDisplayItem}>
@@ -541,7 +608,7 @@ const HomeScreen = () => {
         )}
 
         {/* Inline Comment Input */}
-        {commentingItemId === item.id && user && (
+        {item.type !== NEWSFEED_ITEM_TYPES.PUBLIC_ROLL && commentingItemId === item.id && user && (
           <View style={styles.commentInputSection}>
             <View style={styles.commentInputRow}>
               <TextInput
@@ -576,12 +643,14 @@ const HomeScreen = () => {
           </View>
         )}
 
-        {/* Timestamp */}
-        <View style={styles.timestampContainer}>
-          <Text style={styles.timestamp}>
-            {formatTimestamp(item.createdAt)}
-          </Text>
-        </View>
+        {/* Timestamp (public roll shows date on card overlay instead) */}
+        {item.type !== NEWSFEED_ITEM_TYPES.PUBLIC_ROLL && (
+          <View style={styles.timestampContainer}>
+            <Text style={styles.timestamp}>
+              {formatTimestamp(item.createdAt)}
+            </Text>
+          </View>
+        )}
       </View>
     );
   }, [
@@ -651,6 +720,7 @@ const HomeScreen = () => {
 
       {/* Feed */}
       <FlatList
+        style={styles.feedList}
         data={items}
         renderItem={renderItem}
         keyExtractor={(item) => `${item.type}-${item.id}`}
@@ -670,6 +740,7 @@ const HomeScreen = () => {
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
       />
+
     </View>
   );
 };
@@ -700,7 +771,7 @@ const formatTimestamp = (timestamp) => {
   }
 };
 
-const createStyles = (colors) => StyleSheet.create({
+const createStyles = (colors, isDark) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -717,8 +788,12 @@ const createStyles = (colors) => StyleSheet.create({
     fontWeight: '700',
     color: colors.textPrimary,
   },
+  feedList: {
+    flex: 1,
+  },
   listContent: {
     paddingBottom: 20,
+    flexGrow: 1,
   },
   feedItem: {
     backgroundColor: colors.background,
@@ -761,10 +836,134 @@ const createStyles = (colors) => StyleSheet.create({
     fontWeight: '600',
     color: colors.textPrimary,
   },
-  rollTitle: {
+  rollHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  rollHeaderUsername: {
+    flexShrink: 1,
+    marginRight: 10,
+  },
+  rollKindPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: isDark
+      ? 'rgba(94, 200, 191, 0.12)'
+      : 'rgba(59, 184, 173, 0.10)',
+    borderWidth: 1,
+    borderColor: isDark
+      ? 'rgba(94, 200, 191, 0.22)'
+      : 'rgba(59, 184, 173, 0.20)',
+  },
+  rollKindPillText: {
+    marginLeft: 6,
     fontSize: 12,
-    color: colors.textSecondary,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  rollCardTouchable: {
+    marginHorizontal: ROLL_CARD_INSET,
+    marginBottom: 6,
+  },
+  rollCardFrame: {
+    borderRadius: 10,
+    backgroundColor: isDark ? '#3D3C3A' : '#EFEDE8',
+    paddingTop: 12,
+    paddingHorizontal: 12,
+    paddingBottom: 14,
+    borderWidth: 1,
+    borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: isDark ? 0.45 : 0.14,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  rollCardPhotoShell: {
+    position: 'relative',
+    borderRadius: 4,
+    overflow: 'hidden',
+    backgroundColor: isDark ? '#1C1C1E' : '#E0DDD8',
+  },
+  rollCardImageWrap: {
+    width: '100%',
+    aspectRatio: 1,
+  },
+  rollCardImage: {
+    width: '100%',
+    height: '100%',
+  },
+  rollCardImageFallback: {
+    backgroundColor: colors.inputBackground,
+  },
+  rollCardScrim: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 40,
+    backgroundColor: isDark
+      ? 'rgba(0, 0, 0, 0.22)'
+      : 'rgba(30, 28, 26, 0.12)',
+  },
+  rollCardPolaroidFooter: {
+    paddingTop: 12,
     marginTop: 2,
+  },
+  rollCardOverlayRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+  },
+  rollCardTextCol: {
+    flex: 1,
+    minWidth: 0,
+    marginRight: 12,
+  },
+  rollCardPolaroidTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: isDark ? '#F5F3EF' : '#1A1A1A',
+    lineHeight: 22,
+    letterSpacing: -0.1,
+  },
+  rollCardPolaroidMeta: {
+    marginTop: 4,
+    fontSize: 11,
+    fontWeight: '500',
+    color: isDark ? 'rgba(245, 243, 239, 0.55)' : 'rgba(0, 0, 0, 0.45)',
+  },
+  rollCardPolaroidCaption: {
+    marginTop: 6,
+    fontSize: 13,
+    fontWeight: '400',
+    lineHeight: 18,
+    color: isDark ? 'rgba(245, 243, 239, 0.85)' : 'rgba(0, 0, 0, 0.72)',
+  },
+  rollCardHintPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    backgroundColor: isDark
+      ? 'rgba(59, 184, 173, 0.14)'
+      : 'rgba(59, 184, 173, 0.12)',
+    borderWidth: 1,
+    borderColor: isDark
+      ? 'rgba(94, 200, 191, 0.35)'
+      : 'rgba(59, 184, 173, 0.35)',
+  },
+  rollCardHint: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.primary,
+    marginRight: 6,
   },
   feedImage: {
     width: ITEM_WIDTH,
