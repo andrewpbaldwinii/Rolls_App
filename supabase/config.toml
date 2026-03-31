@@ -3,3 +3,7 @@
 
 [functions.roll-invite]
 verify_jwt = false
+
+# Validates JWT at the edge; the handler also loads the user for the email footer.
+[functions.send-print-order]
+verify_jwt = true

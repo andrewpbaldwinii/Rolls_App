@@ -25,9 +25,11 @@ import {
   validateShippingAddress,
 } from '../services/shippingAddress';
 import { recordLocalPrintOrderRequest } from '../services/printOrders';
+import { sendPrintOrderEmail } from '../services/sendPrintOrderEmail';
+import { supabase } from '../lib/supabase';
 
-/** Fulfillment inbox — replace with your real address when wiring production checkout. */
-const PRINT_ORDERS_EMAIL = 'prints@rolls.app';
+/** Test inbox; swap for a film lab, Printify, or ops email when fulfillment is wired. */
+const PRINT_ORDERS_EMAIL = 'andrew.p.baldwinii@gmail.com';
 
 const emptyForm = () => ({
   fullName: '',
@@ -134,11 +136,33 @@ const RollPrintOrderScreen = () => {
         buyerSummary,
       });
 
-      const subject = encodeURIComponent(
-        `Print order: ${rollTitle} (${selectedPhotos.length} photos)`,
-      );
-      const body = encodeURIComponent(buildEmailBody());
-      const mailtoUrl = `mailto:${PRINT_ORDERS_EMAIL}?subject=${subject}&body=${body}`;
+      const subjectPlain = `Print order: ${rollTitle} (${selectedPhotos.length} photos)`;
+      const bodyPlain = buildEmailBody();
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData?.session) {
+        Alert.alert('Session expired', 'Sign in again and try sending the order.');
+        return;
+      }
+
+      const emailResult = await sendPrintOrderEmail({
+        subject: subjectPlain,
+        text: bodyPlain,
+        rollId,
+      });
+
+      if (emailResult.sent) {
+        Alert.alert(
+          'Order sent',
+          `An email was sent to ${PRINT_ORDERS_EMAIL} with your order details. It also appears under Profile → Print orders.`,
+          [{ text: 'OK', onPress: () => navigation.goBack() }],
+        );
+        return;
+      }
+
+      const subjectEnc = encodeURIComponent(subjectPlain);
+      const bodyEnc = encodeURIComponent(bodyPlain);
+      const mailtoUrl = `mailto:${PRINT_ORDERS_EMAIL}?subject=${subjectEnc}&body=${bodyEnc}`;
 
       let mailOpened = false;
       try {
@@ -153,12 +177,14 @@ const RollPrintOrderScreen = () => {
       if (!mailOpened) {
         Alert.alert(
           'Order saved',
-          `Your request was saved under Print orders. No email app found — copy details manually or contact ${PRINT_ORDERS_EMAIL}.`,
+          emailResult.useMailto && emailResult.errorMessage
+            ? `Could not send automatically (${emailResult.errorMessage}). Your request is under Print orders — email ${PRINT_ORDERS_EMAIL} manually or configure Resend (see supabase/functions/send-print-order).`
+            : `Your request was saved under Print orders. No email app found — contact ${PRINT_ORDERS_EMAIL}.`,
         );
       } else {
         Alert.alert(
           'Order saved',
-          'We opened your email app with a draft to our print team. Your order also appears under Profile → Print orders.',
+          'Automatic send is not configured or failed, so we opened your mail app with a draft instead. Your order also appears under Profile → Print orders.',
           [{ text: 'OK', onPress: () => navigation.goBack() }],
         );
       }
@@ -279,8 +305,9 @@ const RollPrintOrderScreen = () => {
           </TouchableOpacity>
 
           <Text style={styles.footnote}>
-            Opens an email draft to {PRINT_ORDERS_EMAIL} and saves this request in Print orders.
-            Replace the email in code when your fulfillment flow is ready.
+            Tries to email {PRINT_ORDERS_EMAIL} automatically via your Supabase function (Resend). If
+            that is not set up yet, the app opens a mail draft instead. Orders are also saved under
+            Print orders.
           </Text>
         </ScrollView>
       )}

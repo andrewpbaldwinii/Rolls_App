@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "269882676947",
+    "project_id": "rolls-app-68ee6",
+    "storage_bucket": "rolls-app-68ee6.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:269882676947:android:aa982325c8efe82ca7a626",
+        "android_client_info": {
+          "package_name": "com.rollsapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBjF0YJGw4XEujRWL-V8aIjwBAxooJkyxs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

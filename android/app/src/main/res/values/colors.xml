@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Default FCM notification LED/icon tint (@react-native-firebase/messaging expects @color/white). -->
+    <color name="white">#FFFFFFFF</color>
+</resources>

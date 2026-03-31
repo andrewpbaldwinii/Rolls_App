@@ -122,6 +122,7 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+    // Firebase native SDKs: @react-native-firebase/* (autolinked) bring firebase-bom + messaging + in-app messaging.
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
@@ -129,6 +130,8 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+apply plugin: "com.google.gms.google-services"
 
 apply from: "../../node_modules/react-native-vector-icons/fonts.gradle"
 
@@ -141,14 +144,18 @@ tasks.register('fixMipmapDupes', Exec) {
     environment 'MIPMAP_FIX_QUIET', '1'
     commandLine 'bash', 'scripts/fix-android-mipmap-dupes.sh'
 }
+
+tasks.register('fixAndroidFinderDupes', Exec) {
+    group = 'build'
+    description = 'Remove Finder dupes (merger 2.xml, build 2/, etc.). See scripts/android-remove-finder-dupes-in-build.sh'
+    workingDir rollsAppRoot
+    environment 'ANDROID_DUPES_FIX_QUIET', '1'
+    commandLine 'bash', 'scripts/android-remove-finder-dupes-in-build.sh'
+}
+
+tasks.named('preBuild').configure { dependsOn fixAndroidFinderDupes, fixMipmapDupes }
+
 afterEvaluate {
-    // Every resource merge (debug/release) must run after cleanup so Finder dupes never break the build.
-    ['mergeDebugResources', 'mergeReleaseResources'].each { taskName ->
-        def t = tasks.findByName(taskName)
-        if (t != null) {
-            t.dependsOn(fixMipmapDupes)
-        }
-    }
     // Ensure JS bundle output dirs exist before Metro writes (ENOENT after partial cleans; some RN paths use task name as folder).
     tasks.matching { it.name ==~ /^createBundle\w+JsAndAssets$/ }.configureEach { bundleTask ->
         bundleTask.doFirst {

@@ -7,6 +7,7 @@ import {
   isPasswordResetDeepLink,
   parseSupabaseRecoveryVerifyFromUrl,
 } from '../utils/authDeepLink';
+import { deleteAllFcmTokensForUser } from '../services/fcm';
 
 const AuthContext = React.createContext({});
 
@@ -182,6 +183,10 @@ export const AuthProvider = ({ children }) => {
 
   const signOut = async () => {
     try {
+      const uid = user?.id;
+      if (uid) {
+        await deleteAllFcmTokensForUser(uid);
+      }
       await supabase.auth.signOut();
       setUser(null);
       setSession(null);

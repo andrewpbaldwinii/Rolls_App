@@ -5,6 +5,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import { RollsProvider } from './contexts/RollsContext';
 import { NotificationCountsProvider } from './contexts/NotificationCountsContext';
 import AuthNavigator from './navigation/AuthNavigator';
+import PushNotificationBootstrap from './components/PushNotificationBootstrap';
 
 const navigationRef = React.createRef();
 
@@ -13,6 +14,7 @@ const App = () => {
     <SafeAreaProvider>
       <ThemeProvider>
         <AuthProvider>
+          <PushNotificationBootstrap />
           <NotificationCountsProvider>
             <RollsProvider>
               <AuthNavigator navigationRef={navigationRef} />
