@@ -1,28 +1,187 @@
 # Rolls
 
-Rolls — The Disposable Camera App
+### The Disposable Camera App
 
-A social photo app inspired by the experience of disposable cameras. Users create collaborative photo rolls, invite friends to contribute, and experience photos in a more intentional way than traditional social media.
+**Rolls** is a social photography app inspired by the experience of disposable cameras.
 
-## Setup
+Instead of treating every photo as an individual piece of content, Rolls organizes photography around shared experiences. Users create collaborative photo rolls, invite friends to contribute, and capture moments together in a more intentional way than traditional social media.
 
-1. **Node** 20+ (`node -v`).
-2. **Environment** — Copy `.env.example` to `.env` and set `SUPABASE_URL` and `SUPABASE_ANON_KEY` from the Supabase dashboard (Project Settings → API). `.env` is gitignored.
-3. **Install** — `npm install`
-4. **Run** — `npm start` and `npm run ios` / `npm run android`
+The goal is to bring some of the anticipation, imperfection, and shared experience of disposable photography into a modern mobile app.
 
-### Android emulator (Pixel 8)
+---
 
-- Start the **Pixel_8** AVD: `npm run android:emulator` (uses software GPU flags that are stable on many Macs).
-- Install on **that** emulator when several are running: `npm run android:pixel8`
-- Other AVD: `npm run android:emulator -- Medium_Phone_API_36.1`
+## Features
 
-See [SECURITY.md](SECURITY.md) for a short pre-production security checklist.
+* 📸 **Collaborative Rolls** — Create photo rolls and invite friends to contribute
+* 👥 **Social Profiles** — Follow other users and discover their photography
+* 📰 **Social Feed** — See activity and photos from people you follow
+* ❤️ **Likes & Comments** — Interact with photos and rolls
+* 💬 **Messaging** — Communicate with other users within the app
+* 🔔 **Notifications** — Stay updated on interactions and activity
+* 🔒 **Privacy Controls** — Control who can view and contribute to rolls
+* 📱 **Cross-Platform** — Built for both iOS and Android
 
-**Supabase:** Run [`docs/database/sql/USERNAME_AVAILABILITY_RPC.sql`](docs/database/sql/USERNAME_AVAILABILITY_RPC.sql) once so username checks use a secure RPC and a unique index (see [docs/database/DATABASE_OVERVIEW.md](docs/database/DATABASE_OVERVIEW.md)).
+---
 
-**Password reset:** Add `rollsapp://reset-password` under Auth → URL Configuration → Redirect URLs (see [docs/setup/PASSWORD_RESET_DEEP_LINK.md](docs/setup/PASSWORD_RESET_DEEP_LINK.md)).
+## Built With
 
-## Documentation
+* **React Native** — Cross-platform mobile application
+* **TypeScript / JavaScript** — Application development
+* **Supabase** — Backend infrastructure
+* **PostgreSQL** — Application database
+* **Supabase Auth** — Authentication and account management
+* **Supabase Storage** — Photo and media storage
+* **iOS & Android** — Native mobile deployment
 
-Additional setup, schema, feature, and troubleshooting notes live under [`docs/`](docs/README.md).
+---
+
+## Product & Development
+
+Rolls is an independently developed product spanning product strategy, UX, mobile development, backend architecture, and social functionality.
+
+The project includes systems for:
+
+* User authentication and account management
+* User profiles and social relationships
+* Collaborative photo rolls
+* Photo capture, storage, and retrieval
+* Likes and comments
+* Messaging
+* Notifications
+* Public and private content
+* Database permissions and access controls
+* Deep linking and password recovery
+
+The product continues to evolve as new social photography and collaborative experiences are developed and tested.
+
+---
+
+## How Rolls Works
+
+### 1. Create a Roll
+
+Start a new roll around a trip, event, group of friends, or everyday experience.
+
+### 2. Invite Friends
+
+Multiple people can contribute photos to the same roll.
+
+### 3. Capture the Experience
+
+Photos become part of the shared roll rather than isolated posts.
+
+### 4. Experience It Together
+
+Rolls become collections of moments captured from multiple perspectives.
+
+---
+
+## Project Structure
+
+```text
+Rolls_App/
+├── android/          # Android application
+├── ios/              # iOS application
+├── src/              # Application source
+├── supabase/         # Supabase/backend configuration
+├── docs/             # Development and project documentation
+├── scripts/          # Development utilities
+├── README.md
+└── package.json
+```
+
+Additional technical and implementation documentation can be found in [`/docs`](./docs).
+
+---
+
+## Local Development
+
+### Requirements
+
+* Node.js 20+
+* npm
+* Xcode for iOS development
+* Android Studio for Android development
+* A Supabase project
+
+### Installation
+
+Clone the repository:
+
+```bash
+git clone https://github.com/andrewpbaldwinii/Rolls_App.git
+cd Rolls_App
+```
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Create your local environment file:
+
+```bash
+cp .env.example .env
+```
+
+Add your Supabase project configuration:
+
+```text
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+```
+
+The `.env` file is excluded from Git and should not be committed.
+
+Start the development server:
+
+```bash
+npm start
+```
+
+Run the application:
+
+```bash
+npm run ios
+```
+
+or:
+
+```bash
+npm run android
+```
+
+Additional setup instructions are available in [`/docs/setup`](./docs/setup).
+
+---
+
+## Security
+
+Sensitive credentials and production secrets should never be committed to the repository.
+
+The application uses environment variables for configuration and Supabase security controls for backend access.
+
+See [`SECURITY.md`](./SECURITY.md) for additional security and pre-production considerations.
+
+---
+
+## Status
+
+🚧 **Active Development**
+
+Rolls is currently under active development. Features, architecture, and user experiences may change as the product continues to evolve.
+
+---
+
+## About the Project
+
+Rolls started with a simple question:
+
+**What would a disposable camera feel like if it were designed as a social app today?**
+
+The project explores a different approach to social photography—one centered around shared experiences and collections of moments rather than individual posts, follower counts, and constant content optimization.
+
+---
+
+**Built by Andrew Baldwin**
