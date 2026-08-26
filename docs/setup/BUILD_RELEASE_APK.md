@@ -8,7 +8,7 @@ Run this single command:
 
 ```bash
 cd /Users/andrew/Rolls/Rolls_App
-./build-release-apk.sh
+./scripts/build-release-apk.sh
 ```
 
 This will:
@@ -109,7 +109,7 @@ When you make code changes:
 
 1. **Build a new APK:**
    ```bash
-   ./build-release-apk.sh
+   ./scripts/build-release-apk.sh
    ```
 
 2. **Install it again** (it will replace the old version)

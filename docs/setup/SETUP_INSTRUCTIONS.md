@@ -14,7 +14,7 @@ Your Rolls app needs **5 tables total**:
 ### Step 1: Run the Complete Setup Script
 
 1. Open **Supabase Dashboard** → **SQL Editor**
-2. Open the file: `COMPLETE_DATABASE_SETUP.sql`
+2. Open the file: `docs/database/sql/COMPLETE_DATABASE_SETUP.sql`
 3. **Copy the entire contents** and paste into SQL Editor
 4. Click **"Run"** (or press Ctrl+Enter)
 

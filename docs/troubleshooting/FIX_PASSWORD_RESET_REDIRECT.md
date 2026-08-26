@@ -17,7 +17,7 @@ When you click the password reset link in your email, it opens a blank webpage i
    - Also add (for testing):
      ```
      http://localhost:3000
-     https://wdduwfzzwwmwxgttilga.supabase.co/auth/v1/verify
+     https://YOUR_PROJECT_REF.supabase.co/auth/v1/verify
      ```
 
 3. **Update Site URL** (if needed)

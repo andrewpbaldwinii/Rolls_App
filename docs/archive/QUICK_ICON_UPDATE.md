@@ -13,7 +13,7 @@ The app name has been changed from "RN0814Test" to "Rolls"
 
 **Option 1: Use the provided script (if you have ImageMagick)**
 ```bash
-./generate-icons.sh app_icon.png
+./scripts/generate-icons.sh app_icon.png
 ```
 
 **Option 2: Use an online tool**

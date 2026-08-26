@@ -17,7 +17,7 @@ Since Java isn't available in the Cursor environment, run these commands in **yo
 
 ```bash
 cd /Users/andrew/Rolls/Rolls_App
-./build-standalone-apk.sh
+./scripts/build-standalone-apk.sh
 ```
 
 The script will:

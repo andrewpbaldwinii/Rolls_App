@@ -20,7 +20,7 @@ This document explains all the tables in your Rolls app and why each one exists.
   - Need custom fields (username, avatar, bio)
   - Better for displaying user info in your app
 - **Relationship:** 1:1 with auth.users (each auth user has one profile)
-- **Username:** Run **`USERNAME_AVAILABILITY_RPC.sql`** in the SQL editor: adds a **unique index** on `username` and a **`SECURITY DEFINER` RPC** `is_username_available(p_username, p_exclude_user_id)` (granted to `anon` + `authenticated`) so signup/edit can check availability **without** broad `SELECT` on `users`. The app also stores the handle in **Auth `user_metadata`** and **`public.users`**.
+- **Username:** Run **`docs/database/sql/USERNAME_AVAILABILITY_RPC.sql`** in the SQL editor: adds a **unique index** on `username` and a **`SECURITY DEFINER` RPC** `is_username_available(p_username, p_exclude_user_id)` (granted to `anon` + `authenticated`) so signup/edit can check availability **without** broad `SELECT` on `users`. The app also stores the handle in **Auth `user_metadata`** and **`public.users`**.
 
 #### 3. `rolls` (The Main Entity)
 **Purpose:** Stores information about each "Roll" (photo album)

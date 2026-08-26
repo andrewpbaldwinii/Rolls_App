@@ -7,7 +7,7 @@ echo "📦 Building release APK for Rolls App..."
 echo ""
 
 # Navigate to project root
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 # Create assets directory if it doesn't exist
 mkdir -p android/app/src/main/assets

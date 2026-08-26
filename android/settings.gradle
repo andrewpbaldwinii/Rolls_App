@@ -7,6 +7,19 @@ pluginManagement {
     includeBuild("../node_modules/@react-native/gradle-plugin")
 }
 plugins { id("com.facebook.react.settings") }
+
+// New Architecture tasks require autolinking.json at Gradle configuration time. After ./gradlew clean
+// or deleting android/build, the RN cache can skip regen in some cases; seed the file first.
+def autolinkJson = file("build/generated/autolinking/autolinking.json")
+if (!autolinkJson.exists() || autolinkJson.length() == 0L) {
+    autolinkJson.parentFile.mkdirs()
+    def text = providers.exec {
+        workingDir(rootDir.parentFile)
+        commandLine("npx", "@react-native-community/cli", "config")
+    }.standardOutput.asText.get()
+    autolinkJson.text = text
+}
+
 extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
 rootProject.name = 'RollsApp'
 include ':app'

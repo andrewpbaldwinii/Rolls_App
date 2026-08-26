@@ -200,7 +200,7 @@ export const RollsProvider = ({ children }) => {
       // Log detailed error for debugging
       if (err.code === 'PGRST116' || err.message?.includes('does not exist')) {
         console.error('Tables may not exist. Please create the database tables first.');
-        console.error('See DATABASE_SCHEMA.md for SQL scripts to run in Supabase.');
+        console.error('See docs/database/DATABASE_SCHEMA.md for SQL scripts to run in Supabase.');
       }
     } finally {
       setLoading(false);

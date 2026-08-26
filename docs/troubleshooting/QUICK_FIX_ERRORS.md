@@ -57,7 +57,7 @@ CREATE POLICY "Users can delete their own public profile photos"
 4. **Public bucket**: ✅ ON (toggle this ON)
 5. Click "Create bucket"
 
-Then set up policies (see CREATE_PROFILE_PHOTOS_BUCKET.md for details):
+Then set up policies (see docs/setup/CREATE_PROFILE_PHOTOS_BUCKET.md for details):
 - Users can upload their own profile photos (INSERT)
 - Anyone can view profile photos (SELECT)
 - Users can delete their own profile photos (DELETE)

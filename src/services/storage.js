@@ -413,7 +413,7 @@ export const uploadRollTitleImage = async (rollId, imagePath, base64Data = null)
       if (error.message?.includes('Bucket not found') || error.error === 'Bucket not found') {
         throw new Error(
           'Title images bucket not found. Please create the "roll-title-images" bucket in Supabase Storage.\n\n' +
-          'See CREATE_ROLL_TITLE_IMAGES_BUCKET.sql for setup instructions.'
+          'See docs/database/sql/CREATE_ROLL_TITLE_IMAGES_BUCKET.sql for setup instructions.'
         );
       }
       

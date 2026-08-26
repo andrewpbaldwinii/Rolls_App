@@ -4,8 +4,8 @@ PHASE 1: Assessment & Configuration (Preparation) ✅ COMPLETE
 Step 1.1: Verify Supabase Configuration ✅
 - ✅ Check src/lib/supabase.js: Created and configured
 - ✅ Ensure Supabase URL and anon key are configured: 
-  - URL: https://wdduwfzzwwmwxgttilga.supabase.co
-  - Anon Key: sb_publishable_xmgbCz7CHkxdE7lnntkygw_gj6vis9H
+  - URL: (from `.env` — `SUPABASE_URL`)
+  - Anon Key: (from `.env` — `SUPABASE_ANON_KEY`; never commit real keys)
 - ✅ Verify connection settings: React Native-specific config with AsyncStorage
 - ⚠️ Test Supabase connection (run test-supabase-connection.js if available): Can test manually in app
 
@@ -13,7 +13,7 @@ Step 1.2: Verify Android Build Configuration ✅
 - ✅ Ensure Android setup works for Pixel 8: Successfully built and installed
 - ✅ Check android/app/build.gradle (minSdkVersion 24+ is fine): minSdkVersion = 24 ✓
 - ✅ Verify local.properties points to Android SDK: Configured
-- ✅ Test build: npm run android - Successfully built and installed on Pixel 8 (Device ID: 39151FDJH0059J)
+- ✅ Test build: npm run android - Successfully built and installed on Pixel 8 (Device ID: [REDACTED])
 
 PHASE 2: Clean Up Mock Data (Before Auth Implementation) ✅ COMPLETE
 Step 2.1: Find All Mock Data References ✅
@@ -74,7 +74,7 @@ Test session persistence → restart app, should stay logged in
 Test logout → should return to LoginScreen
 Step 5.2: Test on Pixel 8 ✅ (Partially Complete - Metro blocking full test)
 - ✅ Enable USB debugging on Pixel 8: Enabled and working
-- ✅ Connect device: adb devices - Pixel 8 connected (Device ID: 39151FDJH0059J)
+- ✅ Connect device: adb devices - Pixel 8 connected (Device ID: [REDACTED])
 - ✅ Run: npm run android - App built and installed successfully
 - ⚠️  Test full auth flow on device: Ready to test once Metro bundler is running
   - Blocked: Metro bundler can't start (Node.js v20.11.0 < required >=20.19.4)

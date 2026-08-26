@@ -24,12 +24,12 @@ Look for these messages when loading a roll:
 ### 2. Check URL Format
 The original URLs look like:
 ```
-https://wdduwfzzwwmwxgttilga.supabase.co/storage/v1/object/public/roll-images/ba07f10a-4e8b-4b06-936e-ab087521c243/photo_1768381052170.jpg
+https://YOUR_PROJECT_REF.supabase.co/storage/v1/object/public/roll-images/<user-id>/photo_<timestamp>.jpg
 ```
 
 The path should be extracted as:
 ```
-ba07f10a-4e8b-4b06-936e-ab087521c243/photo_1768381052170.jpg
+<user-id>/photo_<timestamp>.jpg
 ```
 
 ### 3. Check Storage Policies

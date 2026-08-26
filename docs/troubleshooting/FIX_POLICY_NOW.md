@@ -1,9 +1,9 @@
 # Fix Policy - Your Path is Correct!
 
 Your path format is **perfect**:
-- Path: `profiles/2cff8f11-16a5-4815-a305-d2fcb69aae7d/profile_...`
+- Path: `profiles/YOUR_USER_UUID/profile_...`
 - First segment: `profiles` ✓
-- Second segment: `2cff8f11-16a5-4815-a305-d2fcb69aae7d` ✓
+- Second segment: `YOUR_USER_UUID` ✓
 - User ID matches ✓
 
 The issue is **definitely with the policy**. Let's fix it:
@@ -53,7 +53,7 @@ Run `TEST_POLICY.sql` in Supabase SQL Editor to verify the logic works with your
 ## Why This Should Work
 
 Your path is:
-- `profiles/2cff8f11-16a5-4815-a305-d2fcb69aae7d/profile_...`
+- `profiles/YOUR_USER_UUID/profile_...`
 
 The policy checks:
 - `(string_to_array(name, '/'))[1] = 'profiles'` → TRUE ✓

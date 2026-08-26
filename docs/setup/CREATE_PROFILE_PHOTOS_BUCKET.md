@@ -65,7 +65,7 @@ After creating the bucket and policies:
 
 Profile photos are stored with this format:
 - **Path**: `{userId}/photo_1234567890.jpg`
-- **Example**: `2cff8f11-16a5-4815-a305-d2fcb69aae7d/photo_1768376312422.jpg`
+- **Example**: `<user-uuid>/photo_<timestamp>.jpg`
 
 ## Benefits
 

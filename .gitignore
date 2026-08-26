@@ -85,6 +85,21 @@ ios/Ionicons.ttf
 .env
 .env.local
 .env.*.local
+.env.*
+!.env.example
+
+# Editor / local tooling
+.cursor/
+.vscode/
+
+# Duplicate Finder copies
+node_modules */
+Gradle files/
+
+# Release / bundler artifacts (contain baked-in env values)
+*.apk
+*.aab
+android/app/src/main/assets/index.android.bundle
 
 # Supabase CLI local cache (do not commit)
 supabase/.temp/

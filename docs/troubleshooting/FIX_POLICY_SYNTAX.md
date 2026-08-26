@@ -20,7 +20,7 @@ bucket_id = 'roll-images' AND (string_to_array(name, '/'))[1] = 'profiles' AND (
 
 Before updating the policy, run `TEST_AUTH_UID.sql` in Supabase SQL Editor to verify:
 1. What `auth.uid()` returns
-2. If it matches your user ID `2cff8f11-16a5-4815-a305-d2fcb69aae7d`
+2. If it matches your user ID (`YOUR_USER_UUID`)
 3. If the path segments match correctly
 
 ## If That Doesn't Work

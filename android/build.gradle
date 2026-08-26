@@ -22,4 +22,9 @@ plugins {
     id 'com.google.gms.google-services' version '4.4.4' apply false
 }
 
+ext {
+    // VisionCamera reads rootProject.ext — no react-native-worklets-core in this app.
+    VisionCamera_enableFrameProcessors = false
+}
+
 apply plugin: "com.facebook.react.rootproject"

@@ -1026,7 +1026,7 @@ export const uploadPublicProfilePhoto = async (userId, imagePath, base64Data = n
       throw new Error(
         `Failed to upload photo: ${uploadError.message}\n\n` +
         `Make sure the 'profile-photos' bucket exists in Supabase Storage.\n` +
-        `See CREATE_PROFILE_PHOTOS_BUCKET.md for setup instructions.`
+        `See docs/setup/CREATE_PROFILE_PHOTOS_BUCKET.md for setup instructions.`
       );
     }
 

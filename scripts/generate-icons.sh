@@ -1,11 +1,14 @@
 #!/bin/bash
 
 # Script to generate Android app icons from a source image
-# Usage: ./generate-icons.sh <source_image.png>
+# Usage: ./scripts/generate-icons.sh <source_image.png>
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
 
 if [ -z "$1" ]; then
-    echo "Usage: ./generate-icons.sh <source_image.png>"
-    echo "Example: ./generate-icons.sh app_icon.png"
+    echo "Usage: ./scripts/generate-icons.sh <source_image.png>"
+    echo "Example: ./scripts/generate-icons.sh app_icon.png"
     exit 1
 fi
 

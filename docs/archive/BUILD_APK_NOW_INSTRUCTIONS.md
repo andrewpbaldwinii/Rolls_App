@@ -6,7 +6,7 @@ Run this command in your terminal:
 
 ```bash
 cd /Users/andrew/Rolls/Rolls_App
-./build-standalone-apk.sh
+./scripts/build-standalone-apk.sh
 ```
 
 ## If the Script Fails
@@ -77,7 +77,7 @@ This APK includes all recent changes:
 - Or use Android Studio which includes Java
 
 ### If you get permission errors:
-- Make sure the build script is executable: `chmod +x build-standalone-apk.sh`
+- Make sure the build script is executable: `chmod +x scripts/build-standalone-apk.sh`
 - Try running with `sudo` (not recommended, but may work)
 
 ### If build fails:

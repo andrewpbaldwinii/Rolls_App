@@ -41,7 +41,7 @@
 3. This creates the `public_profile_photos` table with proper RLS policies
 
 ### Step 2: Create Profile Photos Bucket
-1. Follow instructions in: `CREATE_PROFILE_PHOTOS_BUCKET.md`
+1. Follow instructions in: `docs/setup/CREATE_PROFILE_PHOTOS_BUCKET.md`
 2. Create a new `profile-photos` bucket (separate from `roll-images`)
 3. Set up storage policies for the new bucket
 4. This creates a dedicated space for standalone public photos (like Instagram posts)

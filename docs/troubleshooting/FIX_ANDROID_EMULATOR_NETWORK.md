@@ -69,7 +69,7 @@ Android emulators run in a virtual environment and sometimes have network connec
 
 1. **Use USB Device Instead**: The USB device works fine, so you can continue development there
 2. **Check Metro Bundler**: Make sure Metro is running on your host machine
-3. **Verify Supabase URL**: The URL should be `https://wdduwfzzwwmwxgttilga.supabase.co` (already correct)
+3. **Verify Supabase URL**: It should match `SUPABASE_URL` in your local `.env` (Project Settings → API).
 
 ## Quick Test
 

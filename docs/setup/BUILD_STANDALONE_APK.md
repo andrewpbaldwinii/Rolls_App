@@ -6,7 +6,7 @@ The app is currently running in debug mode, which connects to Metro bundler on y
 
 ```bash
 cd /Users/andrew/Rolls/Rolls_App
-./build-standalone-apk.sh
+./scripts/build-standalone-apk.sh
 ```
 
 ## Manual Method
